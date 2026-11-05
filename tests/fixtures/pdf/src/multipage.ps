@@ -1,0 +1,42 @@
+%!PS-Adobe-3.0
+%%Title: multipage.pdf fixture - two pages, Hungarian accented text
+%%Pages: 2
+%%EndComments
+% Re-encode Helvetica so that byte codes 128-145 select the Hungarian accented glyphs,
+% including the double-acute o and u that StandardEncoding cannot reach.
+/Helvetica findfont dup length dict begin
+  { 1 index /FID ne { def } { pop pop } ifelse } forall
+  /Encoding StandardEncoding 256 array copy def
+  Encoding 128 /aacute put
+  Encoding 129 /eacute put
+  Encoding 130 /iacute put
+  Encoding 131 /oacute put
+  Encoding 132 /odieresis put
+  Encoding 133 /ohungarumlaut put
+  Encoding 134 /uacute put
+  Encoding 135 /udieresis put
+  Encoding 136 /uhungarumlaut put
+  Encoding 137 /Aacute put
+  Encoding 138 /Eacute put
+  Encoding 139 /Iacute put
+  Encoding 140 /Oacute put
+  Encoding 141 /Odieresis put
+  Encoding 142 /Ohungarumlaut put
+  Encoding 143 /Uacute put
+  Encoding 144 /Udieresis put
+  Encoding 145 /Uhungarumlaut put
+  currentdict
+end
+/Helvetica-Hungarian exch definefont pop
+<< /PageSize [595 842] >> setpagedevice
+/Helvetica-Hungarian findfont 18 scalefont setfont
+% Page 1 reads "árvíztűrő tükörfúrógép".
+72 760 moveto (\200rv\202zt\210r\205 t\207k\204rf\206r\203g\201p) show
+72 730 moveto (First page) show
+showpage
+/Helvetica-Hungarian findfont 18 scalefont setfont
+% Page 2 reads "ÁRVÍZTŰRŐ TÜKÖRFÚRÓGÉP".
+72 760 moveto (\211RV\213ZT\221R\216 T\220K\215RF\217R\214G\212P) show
+72 730 moveto (Second page) show
+showpage
+%%EOF
