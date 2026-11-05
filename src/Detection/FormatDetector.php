@@ -103,6 +103,10 @@ final class FormatDetector
             return $this->detectContainer($path, $extension);
         }
 
+        if ($this->hasLatePdfHeader($head)) {
+            return Format::Pdf;
+        }
+
         if ($this->looksLikeText($head)) {
             return self::TEXT_EXTENSIONS[$extension] ?? $this->sniffText($head);
         }
@@ -129,7 +133,7 @@ final class FormatDetector
 
         $head = @file_get_contents($path, false, null, 0, self::SNIFF_BYTES);
 
-        if ($head === false || $this->detectSignature($head) !== null || strncmp($head, "PK\x03\x04", 4) === 0) {
+        if ($head === false || $this->detectSignature($head) !== null || strncmp($head, "PK\x03\x04", 4) === 0 || $this->hasLatePdfHeader($head)) {
             return null;
         }
 
@@ -139,7 +143,7 @@ final class FormatDetector
     private function detectSignature(string $head): ?Format
     {
         return match (true) {
-            str_starts_with($head, '%PDF-'), $this->hasLatePdfHeader($head) => Format::Pdf,
+            str_starts_with($head, '%PDF-') => Format::Pdf,
             str_starts_with($head, "\x89PNG\r\n\x1a\n") => Format::Png,
             str_starts_with($head, "\xFF\xD8\xFF") => Format::Jpeg,
             str_starts_with($head, "II*\0"), str_starts_with($head, "MM\0*") => Format::Tiff,
@@ -153,7 +157,9 @@ final class FormatDetector
 
     /**
      * PDF readers accept the header anywhere in the first kilobyte, and some generators prefix it
-     * with stray bytes. Only a binary prefix counts, so a text file that mentions "%PDF-" stays text.
+     * with stray bytes. Only a prefix holding control bytes counts: text in a legacy 8-bit encoding
+     * that mentions "%PDF-" stays text. Every other signature is checked first, so a PDF embedded
+     * in an image or a zip does not take over the file.
      */
     private function hasLatePdfHeader(string $head): bool
     {
@@ -165,7 +171,7 @@ final class FormatDetector
 
         $prefix = substr($head, 0, $offset);
 
-        return str_contains($prefix, "\0") || ! mb_check_encoding($prefix, 'UTF-8');
+        return preg_match('/[\x00-\x08\x0E-\x1F\x7F]/', $prefix) === 1;
     }
 
     /**

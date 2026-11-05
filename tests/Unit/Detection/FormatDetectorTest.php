@@ -51,6 +51,17 @@ final class FormatDetectorTest extends TestCase
     {
         $this->assertSame(Format::Txt, (new FormatDetector)->detect(Fixtures::file("A file starts with %PDF-1.7\n", 'txt')));
         $this->assertNull((new FormatDetector)->detect(Fixtures::file(str_repeat("\0", 1100).'%PDF-1.4', 'bin')));
+        $this->assertSame(Format::Txt, (new FormatDetector)->detect(Fixtures::file("Caf\xE9 notes about %PDF-1.4\n", 'txt')));
+    }
+
+    public function test_a_pdf_header_embedded_in_another_format_does_not_win(): void
+    {
+        $png = "\x89PNG\r\n\x1a\n".pack('N', 13).'tEXt'.'Comment%PDF-1.4';
+        $jpeg = "\xFF\xD8\xFF\xFE\x00\x10%PDF-1.4 comment";
+
+        $this->assertSame(Format::Png, (new FormatDetector)->detect(Fixtures::file($png, 'png')));
+        $this->assertSame(Format::Jpeg, (new FormatDetector)->detect(Fixtures::file($jpeg, 'jpg')));
+        $this->assertSame(Format::Docx, (new FormatDetector)->detect(Fixtures::zip(['embedded.pdf' => '%PDF-1.4 x', '[Content_Types].xml' => '<Types/>', 'word/document.xml' => '<w:document/>'], 'docx')));
     }
 
     public function test_unreadable_zip_takes_the_container_type_from_the_extension(): void
