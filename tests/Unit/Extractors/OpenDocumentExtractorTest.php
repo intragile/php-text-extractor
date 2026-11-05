@@ -67,10 +67,52 @@ final class OpenDocumentExtractorTest extends TestCase
             .'<office:forms><text:p>form noise</text:p></office:forms>'
             .'<text:p>kept<office:annotation><dc:creator>Bob</dc:creator><text:p>comment</text:p></office:annotation> text</text:p>'
             .'<text:p><draw:frame><svg:title>frame title</svg:title><svg:desc>frame desc</svg:desc><draw:image><text:p>image fallback</text:p></draw:image></draw:frame>after</text:p>'
-            .'<text:p>note<text:note><text:note-citation>1</text:note-citation><text:note-body><text:p>body</text:p></text:note-body></text:note></text:p>'
             .'</office:text>');
 
-        $this->assertSame("kept text\nafter\nnote1body", $result->text);
+        $this->assertSame("kept text\nafter", $result->text);
+    }
+
+    public function test_odt_notes_are_appended_after_the_body_without_citation_marks(): void
+    {
+        $result = $this->extract(OdfFixtures::TEXT, '<office:text>'
+            .'<text:p>Hello<text:note text:note-class="footnote"><text:note-citation>1</text:note-citation>'
+            .'<text:note-body><text:p>Note text</text:p></text:note-body></text:note> world</text:p>'
+            .'<text:p>Second<text:note text:note-class="endnote"><text:note-citation text:label="*">i</text:note-citation>'
+            .'<text:note-body><text:p>Endnote</text:p><text:p>two lines</text:p></text:note-body></text:note></text:p>'
+            .'</office:text>');
+
+        $this->assertSame("Hello world\nSecond\n\nNote text\nEndnote\ntwo lines", $result->text);
+    }
+
+    public function test_odt_table_rows_are_lines_of_tab_separated_cells(): void
+    {
+        $result = $this->extract(OdfFixtures::TEXT, '<office:text><text:p>Before</text:p><table:table table:name="T">'
+            .'<table:table-column table:number-columns-repeated="2"/>'
+            .'<table:table-header-rows><table:table-row><table:table-cell><text:p>H1</text:p></table:table-cell><table:table-cell><text:p>H2</text:p></table:table-cell></table:table-row></table:table-header-rows>'
+            .'<table:table-row><table:table-cell><text:p>a</text:p><text:p>b<text:line-break/>c</text:p></table:table-cell>'
+            .'<table:table-cell><table:table><table:table-row><table:table-cell><text:p>n1</text:p></table:table-cell><table:table-cell><text:p>n2</text:p></table:table-cell></table:table-row></table:table></table:table-cell></table:table-row>'
+            .'<table:table-row><table:table-cell/><table:table-cell><text:p>x</text:p></table:table-cell></table:table-row>'
+            .'</table:table><text:p>After</text:p></office:text>');
+
+        $this->assertSame("Before\nH1\tH2\na b c\tn1 n2\n\tx\nAfter", $result->text);
+    }
+
+    public function test_odp_table_rows_are_lines_of_tab_separated_cells(): void
+    {
+        $result = $this->extract(OdfFixtures::PRESENTATION, '<office:presentation><draw:page draw:name="p1"><draw:frame><table:table>'
+            .'<table:table-row><table:table-cell><text:p>A</text:p></table:table-cell><table:table-cell><text:p>B</text:p></table:table-cell></table:table-row>'
+            .'</table:table></draw:frame></draw:page></office:presentation>');
+
+        $this->assertSame("A\tB", $result->text);
+    }
+
+    public function test_ods_cell_line_breaks_become_spaces(): void
+    {
+        $result = $this->extract(OdfFixtures::SPREADSHEET, '<office:spreadsheet><table:table table:name="S">'
+            .'<table:table-row><table:table-cell><text:p>one<text:line-break/>two</text:p></table:table-cell><table:table-cell><text:p>z</text:p></table:table-cell></table:table-row>'
+            .'</table:table></office:spreadsheet>');
+
+        $this->assertSame("## S\none two\tz", $result->text);
     }
 
     public function test_elements_are_matched_by_namespace_not_prefix(): void

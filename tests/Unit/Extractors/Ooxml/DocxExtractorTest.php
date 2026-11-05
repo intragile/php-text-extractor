@@ -101,9 +101,39 @@ final class DocxExtractorTest extends TestCase
         $result = (new TextExtractor(extractors: [new DocxExtractor]))->extract(OoxmlFixtures::docx($body));
 
         $this->assertSame(Status::Extracted, $result->status);
-        $this->assertStringContainsString("A1\n\tB1", $result->text);
-        $this->assertStringContainsString("A2\n\tB2", $result->text);
-        $this->assertLessThan(strpos($result->text, 'A2'), strpos($result->text, 'B1'));
+        $this->assertSame("A1\tB1\nA2\tB2", $result->text);
+    }
+
+    public function test_docx_table_cell_paragraphs_breaks_and_tabs_stay_on_one_line(): void
+    {
+        $cell = '<w:tc><w:p><w:r><w:t>first</w:t><w:br/><w:t>second</w:t><w:tab/><w:t>third</w:t></w:r></w:p>'
+            .'<w:p/>'.OoxmlFixtures::paragraph('fourth').'</w:tc>';
+        $body = OoxmlFixtures::paragraph('Before')
+            .'<w:tbl><w:tr>'.$cell.'<w:tc>'.OoxmlFixtures::paragraph('B').'</w:tc></w:tr></w:tbl>'
+            .OoxmlFixtures::paragraph('After');
+
+        $this->assertSame("Before\nfirst second third fourth\tB\nAfter\n", $this->extract(OoxmlFixtures::docx($body))->text);
+    }
+
+    public function test_docx_nested_table_is_flattened_into_its_cell(): void
+    {
+        $inner = '<w:tbl><w:tr><w:tc>'.OoxmlFixtures::paragraph('i1').'</w:tc><w:tc>'.OoxmlFixtures::paragraph('i2').'</w:tc></w:tr>'
+            .'<w:tr><w:tc>'.OoxmlFixtures::paragraph('i3').'</w:tc></w:tr></w:tbl>';
+        $body = '<w:tbl><w:tr><w:tc>'.OoxmlFixtures::paragraph('outer').$inner.'<w:p/></w:tc>'
+            .'<w:tc>'.OoxmlFixtures::paragraph('B').'</w:tc></w:tr>'
+            .'<w:tr><w:tc>'.OoxmlFixtures::paragraph('A2').'</w:tc><w:tc>'.OoxmlFixtures::paragraph('B2').'</w:tc></w:tr></w:tbl>';
+
+        $this->assertSame("outer i1 i2 i3\tB\nA2\tB2\n", $this->extract(OoxmlFixtures::docx($body))->text);
+    }
+
+    public function test_docx_merged_and_empty_cells_keep_their_columns(): void
+    {
+        $body = '<w:tbl><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr>'.OoxmlFixtures::paragraph('Wide').'</w:tc>'
+            .'<w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr>'.OoxmlFixtures::paragraph('Tall').'</w:tc></w:tr>'
+            .'<w:tr><w:tc><w:p/></w:tc><w:tc>'.OoxmlFixtures::paragraph('b').'</w:tc><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc></w:tr>'
+            .'<w:tr><w:tc><w:p/></w:tc><w:tc/></w:tr><w:tr/></w:tbl>'.OoxmlFixtures::paragraph('End');
+
+        $this->assertSame("Wide\tTall\n\tb\nEnd\n", $this->extract(OoxmlFixtures::docx($body))->text);
     }
 
     public function test_docx_text_box_alternate_content_appears_once(): void

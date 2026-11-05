@@ -9,6 +9,7 @@ use IntrAgile\TextExtractor\Contracts\Extractor;
 use IntrAgile\TextExtractor\Exception\CorruptInput;
 use IntrAgile\TextExtractor\Format;
 use IntrAgile\TextExtractor\Options;
+use IntrAgile\TextExtractor\Output\LayoutWriter;
 use IntrAgile\TextExtractor\Output\TextBuffer;
 use IntrAgile\TextExtractor\Reason;
 use IntrAgile\TextExtractor\Result;
@@ -19,7 +20,8 @@ use XMLReader;
  * Streams the text of a PowerPoint presentation slide by slide.
  *
  * Slides are read in the order the presentation lists them, which is not necessarily the order of
- * the slideN.xml file names. Speaker notes are left out.
+ * the slideN.xml file names. Speaker notes are left out. Tables are written one line per row with
+ * tab-separated cells.
  */
 final class PptxExtractor implements Extractor
 {
@@ -70,7 +72,7 @@ final class PptxExtractor implements Extractor
 
                 $first = false;
 
-                if (! $this->readSlide($zip->xmlReader($slide), $buffer)) {
+                if (! $this->readSlide($zip->xmlReader($slide), new LayoutWriter($buffer))) {
                     break;
                 }
             }
@@ -126,7 +128,7 @@ final class PptxExtractor implements Extractor
     /**
      * @return bool false once the buffer is full
      */
-    private function readSlide(SafeXmlReader $reader, TextBuffer $buffer): bool
+    private function readSlide(SafeXmlReader $reader, LayoutWriter $writer): bool
     {
         try {
             $inText = false;
@@ -134,7 +136,7 @@ final class PptxExtractor implements Extractor
 
             while ($moved) {
                 $type = $reader->nodeType();
-                $chunk = '';
+                $written = true;
 
                 if ($type === XMLReader::ELEMENT) {
                     // Alternate content repeats the same shapes for older consumers; mc:Choice is kept.
@@ -149,8 +151,19 @@ final class PptxExtractor implements Extractor
 
                         if ($name === 't') {
                             $inText = ! $reader->isEmptyElement();
-                        } elseif ($name === 'br' || ($name === 'p' && $reader->isEmptyElement())) {
-                            $chunk = "\n";
+                        } else {
+                            $written = match ($name) {
+                                'br' => $writer->lineBreak(),
+                                'tbl' => $writer->tableStart(),
+                                'tr' => $writer->rowStart(),
+                                'tc' => $writer->cellStart(),
+                                default => true,
+                            };
+
+                            // An empty element such as <a:p/> produces no end tag but still ends.
+                            if ($written && $reader->isEmptyElement()) {
+                                $written = $this->end($name, $writer);
+                            }
                         }
                     }
                 } elseif ($type === XMLReader::END_ELEMENT) {
@@ -159,15 +172,15 @@ final class PptxExtractor implements Extractor
 
                         if ($name === 't') {
                             $inText = false;
-                        } elseif ($name === 'p') {
-                            $chunk = "\n";
+                        } else {
+                            $written = $this->end($name, $writer);
                         }
                     }
                 } elseif ($inText && in_array($type, [XMLReader::TEXT, XMLReader::CDATA, XMLReader::WHITESPACE, XMLReader::SIGNIFICANT_WHITESPACE], true)) {
-                    $chunk = $reader->value();
+                    $written = $writer->text($reader->value());
                 }
 
-                if ($chunk !== '' && ! $buffer->append($chunk)) {
+                if (! $written) {
                     return false;
                 }
 
@@ -178,5 +191,16 @@ final class PptxExtractor implements Extractor
         } finally {
             $reader->close();
         }
+    }
+
+    private function end(string $name, LayoutWriter $writer): bool
+    {
+        return match ($name) {
+            'p' => $writer->paragraphEnd(),
+            'tc' => $writer->cellEnd(),
+            'tr' => $writer->rowEnd(),
+            'tbl' => $writer->tableEnd(),
+            default => true,
+        };
     }
 }

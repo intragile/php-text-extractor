@@ -96,6 +96,21 @@ final class PptxExtractorTest extends TestCase
         $this->assertStringContainsString('Cell B', $text);
     }
 
+    public function test_table_rows_are_lines_of_tab_separated_cells(): void
+    {
+        $cell = static fn (string ...$paragraphs): string => '<a:tc><a:txBody><a:bodyPr/>'
+            .implode('', array_map(static fn (string $p): string => '<a:p><a:r><a:t>'.$p.'</a:t></a:r></a:p>', $paragraphs))
+            .'</a:txBody><a:tcPr/></a:tc>';
+        $table = '<p:graphicFrame><a:graphic><a:graphicData><a:tbl><a:tblGrid><a:gridCol w="1"/></a:tblGrid>'
+            .'<a:tr h="1">'.$cell('A1', 'more').$cell('B1').'</a:tr>'
+            .'<a:tr h="1">'.$cell('A2').'<a:tc hMerge="1"><a:txBody><a:bodyPr/><a:p/></a:txBody></a:tc>'.$cell('C2').'</a:tr>'
+            .'</a:tbl></a:graphicData></a:graphic></p:graphicFrame>';
+
+        $text = $this->extract(OoxmlFixtures::pptx([OoxmlFixtures::textShape('Title').$table]))->text;
+
+        $this->assertSame("Title\nA1 more\tB1\nA2\t\tC2\n", $text);
+    }
+
     public function test_presentation_without_slides_is_empty(): void
     {
         $result = (new TextExtractor(extractors: [new PptxExtractor]))->extract(OoxmlFixtures::pptx([]));

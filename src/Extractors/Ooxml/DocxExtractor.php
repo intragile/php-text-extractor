@@ -9,6 +9,7 @@ use IntrAgile\TextExtractor\Contracts\Extractor;
 use IntrAgile\TextExtractor\Exception\CorruptInput;
 use IntrAgile\TextExtractor\Format;
 use IntrAgile\TextExtractor\Options;
+use IntrAgile\TextExtractor\Output\LayoutWriter;
 use IntrAgile\TextExtractor\Output\TextBuffer;
 use IntrAgile\TextExtractor\Reason;
 use IntrAgile\TextExtractor\Result;
@@ -20,7 +21,8 @@ use XMLReader;
  *
  * Headers and footers are left out because they repeat on every page and add noise rather than
  * content. Deleted tracked changes, moved-from text and field instructions are skipped so the
- * output reflects what a reader of the final document sees.
+ * output reflects what a reader of the final document sees. Tables are written one line per row
+ * with tab-separated cells.
  */
 final class DocxExtractor implements Extractor
 {
@@ -47,19 +49,6 @@ final class DocxExtractor implements Extractor
         'separator' => true,
         'continuationSeparator' => true,
         'continuationNotice' => true,
-    ];
-
-    private const INLINE = [
-        'tab' => "\t",
-        'br' => "\n",
-        'cr' => "\n",
-        'noBreakHyphen' => '-',
-    ];
-
-    private const BLOCK_END = [
-        'p' => "\n",
-        'tc' => "\t",
-        'tr' => "\n",
     ];
 
     public function supports(Format $format): bool
@@ -94,7 +83,7 @@ final class DocxExtractor implements Extractor
                     break;
                 }
 
-                if (! $this->readPart($zip->xmlReader($part), $buffer)) {
+                if (! $this->readPart($zip->xmlReader($part), new LayoutWriter($buffer))) {
                     break;
                 }
             }
@@ -108,7 +97,7 @@ final class DocxExtractor implements Extractor
     /**
      * @return bool false once the buffer is full
      */
-    private function readPart(SafeXmlReader $reader, TextBuffer $buffer): bool
+    private function readPart(SafeXmlReader $reader, LayoutWriter $writer): bool
     {
         try {
             $inText = false;
@@ -124,16 +113,16 @@ final class DocxExtractor implements Extractor
                         continue;
                     }
 
-                    $chunk = $this->elementText($reader, $inText);
+                    $written = $this->startElement($reader, $writer, $inText);
                 } elseif ($type === XMLReader::END_ELEMENT) {
-                    $chunk = $this->endText($reader, $inText);
+                    $written = $this->endElement($reader, $writer, $inText);
                 } elseif ($inText && in_array($type, [XMLReader::TEXT, XMLReader::CDATA, XMLReader::WHITESPACE, XMLReader::SIGNIFICANT_WHITESPACE], true)) {
-                    $chunk = $reader->value();
+                    $written = $writer->text($reader->value());
                 } else {
-                    $chunk = '';
+                    $written = true;
                 }
 
-                if ($chunk !== '' && ! $buffer->append($chunk)) {
+                if (! $written) {
                     return false;
                 }
 
@@ -171,10 +160,13 @@ final class DocxExtractor implements Extractor
         return false;
     }
 
-    private function elementText(SafeXmlReader $reader, bool &$inText): string
+    /**
+     * @return bool false once the buffer is full
+     */
+    private function startElement(SafeXmlReader $reader, LayoutWriter $writer, bool &$inText): bool
     {
         if (! isset(self::WORDML[$reader->namespaceUri()])) {
-            return '';
+            return true;
         }
 
         $name = $reader->localName();
@@ -182,25 +174,34 @@ final class DocxExtractor implements Extractor
         if ($name === 't') {
             $inText = ! $reader->isEmptyElement();
 
-            return '';
+            return true;
         }
 
-        if (isset(self::INLINE[$name])) {
-            return self::INLINE[$name];
+        $written = match ($name) {
+            'tab' => $writer->tab(),
+            'br', 'cr' => $writer->lineBreak(),
+            'noBreakHyphen' => $writer->text('-'),
+            'tbl' => $writer->tableStart(),
+            'tr' => $writer->rowStart(),
+            'tc' => $writer->cellStart(),
+            default => true,
+        };
+
+        // An empty element such as <w:p/> or <w:tc/> produces no end tag but still ends.
+        if ($written && $reader->isEmptyElement()) {
+            return $this->end($name, $writer);
         }
 
-        // An empty <w:p/> produces no end tag but still ends a paragraph.
-        if ($reader->isEmptyElement() && isset(self::BLOCK_END[$name])) {
-            return self::BLOCK_END[$name];
-        }
-
-        return '';
+        return $written;
     }
 
-    private function endText(SafeXmlReader $reader, bool &$inText): string
+    /**
+     * @return bool false once the buffer is full
+     */
+    private function endElement(SafeXmlReader $reader, LayoutWriter $writer, bool &$inText): bool
     {
         if (! isset(self::WORDML[$reader->namespaceUri()])) {
-            return '';
+            return true;
         }
 
         $name = $reader->localName();
@@ -208,9 +209,20 @@ final class DocxExtractor implements Extractor
         if ($name === 't') {
             $inText = false;
 
-            return '';
+            return true;
         }
 
-        return self::BLOCK_END[$name] ?? '';
+        return $this->end($name, $writer);
+    }
+
+    private function end(string $name, LayoutWriter $writer): bool
+    {
+        return match ($name) {
+            'p' => $writer->paragraphEnd(),
+            'tc' => $writer->cellEnd(),
+            'tr' => $writer->rowEnd(),
+            'tbl' => $writer->tableEnd(),
+            default => true,
+        };
     }
 }
