@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace IntrAgile\TextExtractor\Extractors;
 
+use DateTimeImmutable;
+use DateTimeZone;
 use IntrAgile\TextExtractor\Archive\SafeZip;
 use IntrAgile\TextExtractor\Exception\CorruptInput;
 use IntrAgile\TextExtractor\Format;
@@ -187,6 +189,7 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
         $cellRepeat = 1;
         $cellHasParagraph = false;
         $cellValue = '';
+        $cellIso = null;
 
         $moved = $reader->read();
 
@@ -251,6 +254,7 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
                     $cellHasParagraph = false;
                     $cellRepeat = self::count($reader->attribute('number-columns-repeated', self::NS_TABLE), self::MAX_REPEAT);
                     $cellValue = self::typedValue($reader);
+                    $cellIso = self::isoValue($reader);
                 }
             } elseif ($type === XMLReader::END_ELEMENT) {
                 $closes = true;
@@ -280,7 +284,7 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
                     if ($nestedTables > 0) {
                         $nestedTables -= $name === 'table' ? 1 : 0;
                     } elseif ($name === 'table-cell' && $cell !== null && $row !== null) {
-                        $value = $cellHasParagraph ? trim((string) preg_replace('/[\t\n]+/', ' ', $cell)) : $cellValue;
+                        $value = $cellIso ?? ($cellHasParagraph ? trim((string) preg_replace('/[\t\n]+/', ' ', $cell)) : $cellValue);
 
                         for ($i = 0; $value !== '' && $i < $cellRepeat; $i++) {
                             if ($rowBytes >= $maxBytes) {
@@ -376,6 +380,55 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
         }
 
         return max(1, min($max, (int) trim($value)));
+    }
+
+    /**
+     * Dates and times in ISO 8601 form, whatever display format the cell uses, so that they read
+     * the same as XLSX dates: YYYY-MM-DD, YYYY-MM-DDTHH:MM:SS or HH:MM:SS, rounded to whole
+     * seconds. Durations of a day or more, negative durations and unparsable values return null,
+     * leaving the displayed text.
+     */
+    private static function isoValue(SafeXmlReader $reader): ?string
+    {
+        $type = $reader->attribute('value-type', self::NS_OFFICE);
+
+        if ($type === 'date') {
+            $value = trim((string) $reader->attribute('date-value', self::NS_OFFICE));
+
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $value) === 1) {
+                return $value;
+            }
+
+            if (preg_match('/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?$/', $value, $match) !== 1) {
+                return null;
+            }
+
+            $date = DateTimeImmutable::createFromFormat('!Y-m-d\TH:i:s', $match[1], new DateTimeZone('UTC'));
+
+            if ($date === false || $date->format('Y-m-d\TH:i:s') !== $match[1]) {
+                return null;
+            }
+
+            if (isset($match[2]) && $match[2][0] >= '5') {
+                $date = $date->modify('+1 second');
+            }
+
+            return $date->format('Y-m-d\TH:i:s');
+        }
+
+        if ($type === 'time') {
+            $value = trim((string) $reader->attribute('time-value', self::NS_OFFICE));
+
+            if (preg_match('/^PT(\d+)H(\d+)M(\d+(?:\.\d+)?)S$/', $value, $match) !== 1) {
+                return null;
+            }
+
+            $seconds = (int) $match[1] * 3600 + (int) $match[2] * 60 + (int) round((float) $match[3]);
+
+            return $seconds < 86400 ? sprintf('%02d:%02d:%02d', intdiv($seconds, 3600), intdiv($seconds % 3600, 60), $seconds % 60) : null;
+        }
+
+        return null;
     }
 
     /**

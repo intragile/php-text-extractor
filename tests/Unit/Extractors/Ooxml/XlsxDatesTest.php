@@ -340,19 +340,20 @@ final class XlsxDatesTest extends TestCase
     {
         $ods = OdfFixtures::odf(OdfFixtures::SPREADSHEET, '<office:spreadsheet><table:table table:name="S">'
             .'<table:table-row>'
-            .'<table:table-cell office:value-type="date" office:date-value="2026-11-05"/>'
-            .'<table:table-cell office:value-type="date" office:date-value="2026-11-05T10:30:00"/>'
+            .'<table:table-cell office:value-type="date" office:date-value="2026-11-05"><text:p>05/11/2026</text:p></table:table-cell>'
+            .'<table:table-cell office:value-type="date" office:date-value="2026-11-05T10:30:00"><text:p>05/11/2026 10:30</text:p></table:table-cell>'
+            .'<table:table-cell office:value-type="time" office:time-value="PT10H30M00S"><text:p>10:30 AM</text:p></table:table-cell>'
             .'</table:table-row>'
             .'</table:table></office:spreadsheet>');
         $odsResult = (new TextExtractor(extractors: [new OpenDocumentExtractor]))->extract($ods);
 
         $xlsx = XlsxFixtures::xlsx(
-            ['S' => '<row><c s="0"><v>'.self::SERIAL_1900.'</v></c><c s="1"><v>'.self::SERIAL_1900.'.4375</v></c></row>'],
+            ['S' => '<row><c s="0"><v>'.self::SERIAL_1900.'</v></c><c s="1"><v>'.self::SERIAL_1900.'.4375</v></c><c s="2"><v>0.4375</v></c></row>'],
             [],
-            XlsxFixtures::styles([14, 22]),
+            XlsxFixtures::styles([14, 22, 20]),
         );
 
-        $this->assertSame("## S\n2026-11-05\t2026-11-05T10:30:00", $odsResult->text);
+        $this->assertSame("## S\n2026-11-05\t2026-11-05T10:30:00\t10:30:00", $odsResult->text);
         $this->assertSame($odsResult->text, $this->extract($xlsx)->text);
     }
 

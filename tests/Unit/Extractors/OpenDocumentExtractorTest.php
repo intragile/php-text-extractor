@@ -142,6 +142,33 @@ final class OpenDocumentExtractorTest extends TestCase
         $this->assertSame("## Summary\nName\tTotal\nApples\t1 234,50\n42\t2026-11-05\n\n## Second\nx", $result->text);
     }
 
+    public function test_ods_dates_and_times_use_the_typed_value_in_iso_form(): void
+    {
+        $cell = static fn (string $attributes, string $shown): string => '<table:table-cell '.$attributes.'><text:p>'.$shown.'</text:p></table:table-cell>';
+        $result = $this->extract(OdfFixtures::SPREADSHEET, '<office:spreadsheet><table:table table:name="S">'
+            .'<table:table-row>'
+            .$cell('office:value-type="date" office:date-value="2026-11-05"', '5/11/26')
+            .$cell('office:value-type="date" office:date-value="2025-01-31T14:30:00"', '31/1/25 14:30')
+            .$cell('office:value-type="date" office:date-value="2025-01-31T14:30:59.6"', 'x')
+            .$cell('office:value-type="date" office:date-value="2025-12-31T23:59:59.5"', 'x')
+            .$cell('office:value-type="time" office:time-value="PT14H30M00S"', '14:30')
+            .$cell('office:value-type="time" office:time-value="PT07H05M09.4S"', '7:05')
+            .'</table:table-row><table:table-row>'
+            // Durations of a day or more, negative or unparsable values keep the displayed text.
+            .$cell('office:value-type="time" office:time-value="PT36H00M00S"', '36:00')
+            .$cell('office:value-type="time" office:time-value="-PT01H00M00S"', '-1:00')
+            .$cell('office:value-type="date" office:date-value="next week"', 'soon')
+            .$cell('office:value-type="float" office:value="1234.5"', '1 234,50')
+            .'</table:table-row>'
+            .'</table:table></office:spreadsheet>');
+
+        $this->assertSame('## S
+'
+            .'2026-11-05	2025-01-31T14:30:00	2025-01-31T14:31:00	2026-01-01T00:00:00	14:30:00	07:05:09
+'
+            .'36:00	-1:00	soon	1 234,50', $result->text);
+    }
+
     public function test_repeated_empty_cells_are_not_expanded(): void
     {
         $result = $this->extract(OdfFixtures::SPREADSHEET, '<office:spreadsheet><table:table table:name="S">'
