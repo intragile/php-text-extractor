@@ -153,6 +153,27 @@ final class DocxExtractorTest extends TestCase
         $this->assertStringContainsString('after', $text);
     }
 
+    public function test_separator_after_a_note_mark_is_not_written(): void
+    {
+        // Word puts a space and LibreOffice a tab between the note number and the note text.
+        $mark = static fn (string $kind, string $separator, string $text): string => '<w:p><w:r><w:'.$kind.'Ref/></w:r>'
+            .'<w:r>'.$separator.'<w:t>'.$text.'</w:t></w:r></w:p>';
+        $footnotes = OoxmlFixtures::notes('footnote', '<w:footnote w:id="1">'.$mark('footnote', '<w:tab/>', 'Tab note')
+            .'<w:p><w:r><w:tab/><w:t>Indented second paragraph</w:t></w:r></w:p></w:footnote>'
+            .'<w:footnote w:id="2"><w:p><w:r><w:footnoteRef/></w:r></w:p><w:p><w:r><w:tab/><w:t>Indented after a bare mark</w:t></w:r></w:p></w:footnote>');
+        $endnotes = OoxmlFixtures::notes('endnote', '<w:endnote w:id="1">'.$mark('endnote', '<w:t xml:space="preserve"> </w:t>', 'Space note').'</w:endnote>');
+        $body = '<w:p><w:r><w:t>Body</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r></w:p>';
+
+        $text = $this->extract(OoxmlFixtures::docx($body, [
+            'word/footnotes.xml' => $footnotes,
+            'word/endnotes.xml' => $endnotes,
+        ]))->text;
+
+        $this->assertStringContainsString("\nTab note\n\tIndented second paragraph\n", $text."\n");
+        $this->assertStringContainsString("\nSpace note", $text);
+        $this->assertStringContainsString("\tIndented after a bare mark", $text);
+    }
+
     public function test_docx_footnotes_are_appended(): void
     {
         $footnotes = OoxmlFixtures::notes('footnote', '<w:footnote w:id="1">'.OoxmlFixtures::paragraph('Footnote text').'</w:footnote>');

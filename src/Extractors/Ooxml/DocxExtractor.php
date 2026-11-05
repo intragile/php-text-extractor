@@ -107,6 +107,9 @@ final class DocxExtractor implements DeadlineAwareExtractor
     {
         try {
             $inText = false;
+            // Word separates a note's number from its text with a space, LibreOffice with a tab;
+            // without the number that separator would start the note's line.
+            $afterNoteMark = false;
             $moved = $reader->read();
 
             while ($moved) {
@@ -119,11 +122,27 @@ final class DocxExtractor implements DeadlineAwareExtractor
                         continue;
                     }
 
+                    if ($afterNoteMark && $reader->localName() === 'tab' && isset(self::WORDML[$reader->namespaceUri()])) {
+                        $afterNoteMark = false;
+                        $moved = $reader->read();
+
+                        continue;
+                    }
+
+                    $afterNoteMark = $afterNoteMark || $this->isNoteMark($reader);
                     $written = $this->startElement($reader, $writer, $inText);
                 } elseif ($type === XMLReader::END_ELEMENT) {
+                    $afterNoteMark = $afterNoteMark && $reader->localName() !== 'p';
                     $written = $this->endElement($reader, $writer, $inText);
                 } elseif ($inText && in_array($type, [XMLReader::TEXT, XMLReader::CDATA, XMLReader::WHITESPACE, XMLReader::SIGNIFICANT_WHITESPACE], true)) {
-                    $written = $writer->text($reader->value());
+                    $value = $reader->value();
+
+                    if ($afterNoteMark) {
+                        $value = ltrim($value, ' ');
+                        $afterNoteMark = $value === '';
+                    }
+
+                    $written = $value === '' || $writer->text($value);
                 } else {
                     $written = true;
                 }
@@ -139,6 +158,13 @@ final class DocxExtractor implements DeadlineAwareExtractor
         } finally {
             $reader->close();
         }
+    }
+
+    private function isNoteMark(SafeXmlReader $reader): bool
+    {
+        $name = $reader->localName();
+
+        return ($name === 'footnoteRef' || $name === 'endnoteRef') && isset(self::WORDML[$reader->namespaceUri()]);
     }
 
     private function isSkipped(SafeXmlReader $reader): bool
