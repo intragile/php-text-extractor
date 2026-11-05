@@ -7,11 +7,14 @@ namespace IntrAgile\TextExtractor\Tests\Unit\Extractors;
 use IntrAgile\TextExtractor\Extractors\RtfExtractor;
 use IntrAgile\TextExtractor\Format;
 use IntrAgile\TextExtractor\Options;
+use IntrAgile\TextExtractor\Output\TextBuffer;
 use IntrAgile\TextExtractor\Result;
 use IntrAgile\TextExtractor\Status;
 use IntrAgile\TextExtractor\Tests\Support\Fixtures;
 use IntrAgile\TextExtractor\Tests\Support\TestCase;
 use IntrAgile\TextExtractor\TextExtractor;
+use PHPUnit\Framework\Attributes\DataProvider;
+use ReflectionObject;
 
 final class RtfExtractorTest extends TestCase
 {
@@ -228,6 +231,43 @@ final class RtfExtractorTest extends TestCase
         $result = (new RtfExtractor)->extract(Fixtures::path('rtf'), Format::Rtf, new Options);
 
         $this->assertSame(Status::Failed, $result->status);
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function builtInCodePages(): iterable
+    {
+        yield 'ansicpg 1253' => ["{\\rtf1\\ansi\\ansicpg1253 \\'e1\\'e2\\'e3}", "\u{03B1}\u{03B2}\u{03B3}"];
+        yield 'ansicpg 874' => ["{\\rtf1\\ansi\\ansicpg874 \\'a1\\'a2}", "\u{0E01}\u{0E02}"];
+        yield 'ansicpg 437' => ["{\\rtf1\\pc\\ansicpg437 caf\\'82}", "caf\u{00E9}"];
+        yield 'fcharset 161 Greek' => ["{\\rtf1\\ansi\\ansicpg1252{\\fonttbl{\\f0\\fcharset161 Arial;}}\\f0 \\'e1\\'e2\\'e3}", "\u{03B1}\u{03B2}\u{03B3}"];
+        yield 'fcharset 177 Hebrew' => ["{\\rtf1\\ansi\\ansicpg1252{\\fonttbl{\\f0\\fcharset177 Arial;}}\\f0 \\'f9\\'ec\\'e5\\'ed}", "\u{05E9}\u{05DC}\u{05D5}\u{05DD}"];
+        yield 'fcharset 178 Arabic' => ["{\\rtf1\\ansi\\ansicpg1252{\\fonttbl{\\f0\\fcharset178 Arial;}}\\f0 \\'e3\\'d1\\'cd\\'c8\\'c7}", "\u{0645}\u{0631}\u{062D}\u{0628}\u{0627}"];
+        yield 'fcharset 186 Baltic' => ["{\\rtf1\\ansi\\ansicpg1252{\\fonttbl{\\f0\\fcharset186 Arial;}}\\f0 \\'d0\\'e0\\'eb}", "\u{0160}\u{0105}\u{0117}"];
+        yield 'fcharset 163 Vietnamese' => ["{\\rtf1\\ansi\\ansicpg1252{\\fonttbl{\\f0\\fcharset163 Arial;}}\\f0 \\'d0\\'f5\\'fd}", "\u{0110}\u{01A1}\u{01B0}"];
+        yield 'fcharset 222 Thai' => ["{\\rtf1\\ansi\\ansicpg1252{\\fonttbl{\\f0\\fcharset222 Tahoma;}}\\f0 \\'a1\\'a2}", "\u{0E01}\u{0E02}"];
+    }
+
+    #[DataProvider('builtInCodePages')]
+    public function test_code_pages_missing_from_mbstring_are_decoded(string $rtf, string $expected): void
+    {
+        $this->assertSame($expected, $this->extract($rtf)->text);
+    }
+
+    public function test_a_reused_extractor_keeps_no_document_state_between_calls(): void
+    {
+        $extractor = new RtfExtractor;
+        $extractor->extract(Fixtures::file('{\rtf1\ansi '.str_repeat('abc \par ', 10_000).'}', 'rtf'), Format::Rtf, new Options);
+
+        foreach ((new ReflectionObject($extractor))->getProperties() as $property) {
+            $value = $property->getValue($extractor);
+
+            $this->assertFalse(
+                $value instanceof TextBuffer && $value->toString() !== '',
+                sprintf('Property "%s" still holds the previous document text.', $property->getName()),
+            );
+        }
     }
 
     private function extract(string $rtf, ?Options $options = null): Result
