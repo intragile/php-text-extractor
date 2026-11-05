@@ -134,7 +134,7 @@ dönti el azt is, melyik Office-formátum a zip-konténer.
 |---|---|
 | DOCX | törzs, táblázatok, szövegdobozok, láb- és végjegyzetek; a törölt változáskövetés és a mezőkódok kimaradnak |
 | XLSX | minden munkalap `## Munkalap neve` sorral, utána a nem üres sorok, a cellák tabulátorral (a cellán belüli sortörésből szóköz lesz); a képletek tárolt értéke; a dátum- vagy időformátumú számok ISO 8601 alakban (`2026-11-05`, `2026-11-05T10:30:00`, `10:30:00`); a számformátum dönti el, hogy a három közül melyik; az időtartamok (pl. `[h]:mm`) és a többi szám tárolt értékként |
-| PPTX | diák a bemutató sorrendjében, üres sorral elválasztva; az előadói jegyzetek kimaradnak |
+| PPTX | diák a bemutató sorrendjében, üres sorral elválasztva (az üres bekezdés a dián belül nem ad sort); minden dia előadói jegyzete a dia szövege után következik, a jegyzetoldal fejléce, lábléce és diaszáma nélkül |
 | ODT / ODS / ODP | mint a DOCX / XLSX / PPTX; a dátum- és időcellák ugyanabban az ISO 8601 jelölésben, mint az XLSX-nél, a tárolt értékből (az egy napnál hosszabb időtartam a megjelenített szövegével marad); a megjegyzések és a törölt változások kimaradnak; a sablonokat (OTT, OTS, OTP) és a Writer/Web dokumentumokat ugyanígy olvassa |
 | RTF | szöveg bekezdésekkel; a betűtábla, a képek és az egyéb metaadatok kimaradnak |
 | HTML | a látható szöveg, a blokkelemek külön sorban; a script és a style kimarad; a `<head>` címe az első |

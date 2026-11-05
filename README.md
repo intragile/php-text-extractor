@@ -132,7 +132,7 @@ format a zip container is meant to be.
 |---|---|
 | DOCX | body, tables, text boxes, footnotes and endnotes; deleted tracked changes and field codes are left out |
 | XLSX | every sheet as `## Sheet name`, then one line per non-empty row with cells separated by tabs (line breaks inside a cell become spaces); cached formula values; numbers formatted as dates or times in ISO 8601 form (`2026-11-05`, `2026-11-05T10:30:00`, `10:30:00`), the number format deciding which of the three is written; durations such as `[h]:mm` and other numbers as stored |
-| PPTX | slides in presentation order, separated by a blank line; speaker notes are left out |
+| PPTX | slides in presentation order, separated by a blank line (empty paragraphs add no line inside a slide); each slide's speaker notes follow its text, without the notes page's header, footer or slide number |
 | ODT / ODS / ODP | as for DOCX / XLSX / PPTX; date and time cells in the same ISO 8601 notation as XLSX, taken from the stored value (a duration of a day or more keeps its displayed text); annotations and tracked deletions are left out; templates (OTT, OTS, OTP) and Writer/Web documents are read the same way |
 | RTF | text with paragraphs; font tables, pictures and other metadata are skipped |
 | HTML | visible text with block elements on separate lines; scripts and styles are dropped; the `<head>` title first |

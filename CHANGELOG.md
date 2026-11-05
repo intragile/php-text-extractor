@@ -27,6 +27,7 @@ All notable changes to this project are documented here. The format follows
   decoders for Windows-1250, 1253, 1255–1258, CP874 and CP437.
 - `maxParseSeconds`, a cooperative time limit for parsing done in PHP, reported as
   `Failed` / `parse_timeout`; external tools keep their own `processTimeout`.
+- Speaker notes of PPTX and ODP slides, written after the text of their slide.
 - XLSX cells with a date or time number format and ODS date and time cells are written in ISO
   8601 notation (`2026-11-05`, `2026-11-05T10:30:00`, `10:30:00`) instead of their display text
   or serial number; for XLSX the number format decides which part is shown, and both the 1900 and
