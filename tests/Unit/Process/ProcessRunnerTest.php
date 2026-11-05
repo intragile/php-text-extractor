@@ -142,4 +142,23 @@ final class ProcessRunnerTest extends TestCase
 
         $this->assertSame(Reason::ToolFailed, $result->outcome());
     }
+
+    public function test_nested_output_is_removed_without_following_symlinks(): void
+    {
+        $outside = sys_get_temp_dir().DIRECTORY_SEPARATOR.'txx_outside_'.bin2hex(random_bytes(4));
+        mkdir($outside);
+        file_put_contents($outside.'/keep.txt', 'keep');
+
+        try {
+            $code = 'mkdir("a/b", 0700, true); file_put_contents("a/b/c.txt", "x"); file_put_contents("a/d.txt", "y");'
+                .' symlink('.var_export($outside, true).', "a/link"); echo getcwd();';
+            $result = (new ProcessRunner)->run($this->php($code), 10, 0, 4096);
+
+            $this->assertDirectoryDoesNotExist($result->stdout);
+            $this->assertFileExists($outside.'/keep.txt');
+        } finally {
+            @unlink($outside.'/keep.txt');
+            @rmdir($outside);
+        }
+    }
 }

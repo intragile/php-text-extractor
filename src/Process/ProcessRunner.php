@@ -158,15 +158,28 @@ final class ProcessRunner
         return null;
     }
 
+    /**
+     * Removes whatever the tool left behind, depth first. Symbolic links are deleted as links and
+     * never followed, so a tool cannot make the cleanup delete files outside its directory.
+     */
     private function removeWorkingDirectory(string $directory): void
     {
-        foreach (scandir($directory) ?: [] as $entry) {
-            if ($entry !== '.' && $entry !== '..') {
-                $path = $directory.DIRECTORY_SEPARATOR.$entry;
+        foreach (@scandir($directory) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
 
-                if (is_file($path) || is_link($path)) {
-                    @unlink($path);
+            $path = $directory.DIRECTORY_SEPARATOR.$entry;
+
+            if (is_link($path)) {
+                // On Windows a link to a directory is removed with rmdir(), not unlink().
+                if (! @unlink($path)) {
+                    @rmdir($path);
                 }
+            } elseif (is_dir($path)) {
+                $this->removeWorkingDirectory($path);
+            } else {
+                @unlink($path);
             }
         }
 
