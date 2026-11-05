@@ -44,7 +44,7 @@ final class PptxExtractorTest extends TestCase
         $result = $this->extract(OoxmlFixtures::pptx([$shape]));
 
         $this->assertSame(Status::Extracted, $result->status);
-        $this->assertSame("Title\nLine one\nline two\n\n", $result->text);
+        $this->assertSame("Title\nLine one\nline two\n", $result->text);
     }
 
     public function test_slides_are_separated_by_a_blank_line(): void
@@ -175,6 +175,34 @@ final class PptxExtractorTest extends TestCase
         $zip->close();
 
         return $path;
+    }
+
+    public function test_speaker_notes_follow_the_text_of_their_slide(): void
+    {
+        $notes = OoxmlFixtures::placeholderShape('sldImg')
+            .OoxmlFixtures::placeholderShape('body', 'First note', 'Ékezetes jegyzet')
+            .OoxmlFixtures::placeholderShape('sldNum', '1')
+            .OoxmlFixtures::placeholderShape('ftr', 'Footer');
+        $path = OoxmlFixtures::pptx(
+            [OoxmlFixtures::textShape('Slide one'), OoxmlFixtures::textShape('Slide two')],
+            null,
+            [1 => $notes, 2 => '<p:grpSp>'.OoxmlFixtures::placeholderShape('body', 'Grouped note').'</p:grpSp>'],
+        );
+
+        $this->assertSame("Slide one\nFirst note\nÉkezetes jegyzet\n\nSlide two\nGrouped note\n", $this->extract($path)->text);
+    }
+
+    public function test_empty_paragraphs_do_not_add_blank_lines_inside_a_slide(): void
+    {
+        // A blank line only ever separates two slides, so empty placeholder paragraphs are dropped.
+        $empty = '<p:sp><p:nvSpPr><p:cNvPr id="3" name="Body"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:p><a:pPr/></a:p><a:p/></p:txBody></p:sp>';
+        $path = OoxmlFixtures::pptx(
+            [OoxmlFixtures::textShape('Title').$empty, OoxmlFixtures::textShape('Next')],
+            null,
+            [1 => OoxmlFixtures::placeholderShape('body', 'Note')],
+        );
+
+        $this->assertSame("Title\nNote\n\nNext\n", $this->extract($path)->text);
     }
 
     private function extract(string $path): Result

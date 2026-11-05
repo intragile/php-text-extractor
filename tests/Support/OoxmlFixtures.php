@@ -92,8 +92,9 @@ final class OoxmlFixtures
      * @param  list<string>  $slideXmls  Contents of each slide's p:spTree, stored as slide1.xml, slide2.xml, ...
      * @param  list<int>|null  $order  Slide numbers in presentation order; a number without a slide
      *                                 part produces a relationship to a missing part.
+     * @param  array<int, string>  $notes  Slide number => contents of that slide's notes p:spTree.
      */
-    public static function pptx(array $slideXmls, ?array $order = null): string
+    public static function pptx(array $slideXmls, ?array $order = null, array $notes = []): string
     {
         $count = count($slideXmls);
         $order ??= $count === 0 ? [] : range(1, $count);
@@ -113,9 +114,17 @@ final class OoxmlFixtures
                 .'<p:sld '.self::P_NAMESPACES.'><p:cSld><p:spTree>'
                 .'<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>'
                 .$spTree.'</p:spTree></p:cSld></p:sld>';
-            $entries[sprintf('ppt/slides/_rels/slide%d.xml.rels', $number)] = self::rels(
-                '<Relationship Id="rId1" Type="'.self::REL.'slideLayout" Target="../slideLayouts/slideLayout1.xml"/>',
-            );
+            $slideRelationships = '<Relationship Id="rId1" Type="'.self::REL.'slideLayout" Target="../slideLayouts/slideLayout1.xml"/>';
+
+            if (isset($notes[$number])) {
+                $slideRelationships .= sprintf('<Relationship Id="rId2" Type="%snotesSlide" Target="../notesSlides/notesSlide%d.xml"/>', self::REL, $number);
+                $entries[sprintf('ppt/notesSlides/notesSlide%d.xml', $number)] = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                    .'<p:notes '.self::P_NAMESPACES.'><p:cSld><p:spTree>'
+                    .'<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>'
+                    .$notes[$number].'</p:spTree></p:cSld></p:notes>';
+            }
+
+            $entries[sprintf('ppt/slides/_rels/slide%d.xml.rels', $number)] = self::rels($slideRelationships);
         }
 
         $slideIds = '';
@@ -140,7 +149,16 @@ final class OoxmlFixtures
 
     public static function textShape(string ...$paragraphs): string
     {
-        $xml = '<p:sp><p:nvSpPr><p:cNvPr id="2" name="Text"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/>'
+        return self::placeholderShape(null, ...$paragraphs);
+    }
+
+    /**
+     * @param  string|null  $type  Placeholder type such as "body" or "sldNum"; null for a plain shape.
+     */
+    public static function placeholderShape(?string $type, string ...$paragraphs): string
+    {
+        $placeholder = $type === null ? '<p:nvPr/>' : '<p:nvPr><p:ph type="'.$type.'"/></p:nvPr>';
+        $xml = '<p:sp><p:nvSpPr><p:cNvPr id="2" name="Text"/><p:cNvSpPr/>'.$placeholder.'</p:nvSpPr><p:spPr/>'
             .'<p:txBody><a:bodyPr/><a:lstStyle/>';
 
         foreach ($paragraphs as $paragraph) {

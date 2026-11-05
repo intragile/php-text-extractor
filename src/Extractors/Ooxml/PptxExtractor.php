@@ -21,8 +21,9 @@ use XMLReader;
  * Streams the text of a PowerPoint presentation slide by slide.
  *
  * Slides are read in the order the presentation lists them, which is not necessarily the order of
- * the slideN.xml file names. Speaker notes are left out. Tables are written one line per row with
- * tab-separated cells.
+ * the slideN.xml file names. The speaker notes of a slide follow its text; of a notes page only the
+ * notes placeholder is read, not the slide image, header, footer, date or page number. Tables are
+ * written one line per row with tab-separated cells.
  */
 final class PptxExtractor implements DeadlineAwareExtractor
 {
@@ -78,8 +79,14 @@ final class PptxExtractor implements DeadlineAwareExtractor
 
                 $first = false;
 
-                if (! $this->readSlide($zip->xmlReader($slide), new LayoutWriter($buffer))) {
+                if (! $this->readSlide($zip->xmlReader($slide), new LayoutWriter($buffer), false)) {
                     break;
+                }
+
+                foreach (PartLocator::byType($zip, $slide, 'notesSlide') as $notes) {
+                    if (! $this->readSlide($zip->xmlReader($notes), new LayoutWriter($buffer), true)) {
+                        break 2;
+                    }
                 }
             }
         } finally {
@@ -132,12 +139,15 @@ final class PptxExtractor implements DeadlineAwareExtractor
     }
 
     /**
+     * @param  bool  $notesOnly  Read only the body placeholder, as on a notes page.
      * @return bool false once the buffer is full
      */
-    private function readSlide(SafeXmlReader $reader, LayoutWriter $writer): bool
+    private function readSlide(SafeXmlReader $reader, LayoutWriter $writer, bool $notesOnly): bool
     {
         try {
             $inText = false;
+            // On a notes page a shape's placeholder type comes before its text body.
+            $notesShape = false;
             $moved = $reader->read();
 
             while ($moved) {
@@ -152,7 +162,15 @@ final class PptxExtractor implements DeadlineAwareExtractor
                         continue;
                     }
 
-                    if (isset(self::DRAWINGML[$reader->namespaceUri()])) {
+                    if ($notesOnly && isset(self::PRESENTATIONML[$reader->namespaceUri()])) {
+                        $name = $reader->localName();
+
+                        if ($name === 'sp') {
+                            $notesShape = false;
+                        } elseif ($name === 'ph') {
+                            $notesShape = $reader->attribute('type') === 'body';
+                        }
+                    } elseif (isset(self::DRAWINGML[$reader->namespaceUri()]) && (! $notesOnly || $notesShape)) {
                         $name = $reader->localName();
 
                         if ($name === 't') {
@@ -173,7 +191,9 @@ final class PptxExtractor implements DeadlineAwareExtractor
                         }
                     }
                 } elseif ($type === XMLReader::END_ELEMENT) {
-                    if (isset(self::DRAWINGML[$reader->namespaceUri()])) {
+                    if ($notesOnly && isset(self::PRESENTATIONML[$reader->namespaceUri()]) && $reader->localName() === 'sp') {
+                        $notesShape = false;
+                    } elseif (isset(self::DRAWINGML[$reader->namespaceUri()]) && (! $notesOnly || $notesShape)) {
                         $name = $reader->localName();
 
                         if ($name === 't') {
@@ -202,7 +222,7 @@ final class PptxExtractor implements DeadlineAwareExtractor
     private function end(string $name, LayoutWriter $writer): bool
     {
         return match ($name) {
-            'p' => $writer->paragraphEnd(),
+            'p' => $writer->blockEnd(),
             'tc' => $writer->cellEnd(),
             'tr' => $writer->rowEnd(),
             'tbl' => $writer->tableEnd(),

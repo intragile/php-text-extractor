@@ -246,11 +246,26 @@ final class OpenDocumentExtractorTest extends TestCase
     {
         $result = $this->extract(OdfFixtures::PRESENTATION, '<office:presentation>'
             .'<draw:page draw:name="p1"><draw:frame><draw:text-box><text:p>One</text:p><text:p>More</text:p></draw:text-box></draw:frame>'
-            .'<presentation:notes><draw:frame><draw:text-box><text:p>speaker notes</text:p></draw:text-box></draw:frame></presentation:notes></draw:page>'
+            .'<presentation:notes><draw:page-thumbnail presentation:class="page"/>'
+            .'<draw:frame presentation:class="notes"><draw:text-box><text:p>speaker notes</text:p></draw:text-box></draw:frame>'
+            .'<draw:frame presentation:class="footer"><draw:text-box><text:p>Footer</text:p></draw:text-box></draw:frame>'
+            .'<draw:frame presentation:class="page-number"><draw:text-box><text:p>1</text:p></draw:text-box></draw:frame>'
+            .'</presentation:notes></draw:page>'
             .'<draw:page draw:name="p2"><draw:frame><draw:text-box><text:p>Two</text:p></draw:text-box></draw:frame></draw:page>'
             .'</office:presentation>');
 
-        $this->assertSame("One\nMore\n\nTwo", $result->text);
+        $this->assertSame("One\nMore\nspeaker notes\n\nTwo", $result->text);
+    }
+
+    public function test_empty_paragraphs_do_not_add_blank_lines_inside_an_odp_page(): void
+    {
+        $result = $this->extract(OdfFixtures::PRESENTATION, '<office:presentation>'
+            .'<draw:page><draw:frame><draw:text-box><text:p>Title</text:p><text:p/><text:p></text:p></draw:text-box></draw:frame>'
+            .'<presentation:notes><draw:frame presentation:class="notes"><draw:text-box><text:p>Note</text:p></draw:text-box></draw:frame></presentation:notes></draw:page>'
+            .'<draw:page><draw:frame><draw:text-box><text:p>Next</text:p></draw:text-box></draw:frame></draw:page>'
+            .'</office:presentation>');
+
+        $this->assertSame("Title\nNote\n\nNext", $result->text);
     }
 
     public function test_missing_content_is_corrupt(): void

@@ -49,8 +49,7 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
 
     /**
      * Subtrees whose text is not part of the visible document body: comments, deleted revisions,
-     * footnote and endnote marks, accessibility metadata, speaker notes, embedded binaries and
-     * style definitions.
+     * footnote and endnote marks, accessibility metadata, embedded binaries and style definitions.
      */
     private const SKIPPED = [
         self::NS_OFFICE => ['annotation', 'forms', 'automatic-styles', 'font-face-decls', 'scripts'],
@@ -58,7 +57,6 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
         self::NS_TABLE => ['covered-table-cell'],
         self::NS_DRAW => ['image'],
         self::NS_SVG => ['desc', 'title'],
-        self::NS_PRESENTATION => ['notes'],
     ];
 
     /** Table elements of text documents and presentations => their start and end layout events. */
@@ -171,6 +169,7 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
         $paragraphs = 0;
         $pages = 0;
         $spreadsheet = false;
+        $presentation = false;
         $nestedTables = 0;
         $tableName = '';
         $headerWritten = false;
@@ -191,6 +190,7 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
         $cellValue = '';
         $cellIso = null;
         $cellTimeOfDay = null;
+        $speakerNotesDepth = null;
 
         $moved = $reader->read();
 
@@ -204,7 +204,13 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
             $closes = false;
 
             if ($type === XMLReader::ELEMENT) {
-                if (in_array($name, self::SKIPPED[$namespace] ?? [], true)) {
+                // Speaker notes keep only their notes frame; the slide thumbnail, header, footer,
+                // date and page number frames of the notes page are not part of what was said.
+                $notesFrameClass = $speakerNotesDepth !== null && $namespace === self::NS_DRAW && $name === 'frame'
+                    ? $reader->attribute('class', self::NS_PRESENTATION)
+                    : null;
+
+                if (in_array($name, self::SKIPPED[$namespace] ?? [], true) || ($notesFrameClass !== null && $notesFrameClass !== 'notes')) {
                     $moved = $reader->next();
 
                     continue;
@@ -236,6 +242,10 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
                     }
                 } elseif ($namespace === self::NS_OFFICE && $name === 'spreadsheet') {
                     $spreadsheet = true;
+                } elseif ($namespace === self::NS_OFFICE && $name === 'presentation') {
+                    $presentation = true;
+                } elseif ($namespace === self::NS_PRESENTATION && $name === 'notes' && ! $reader->isEmptyElement()) {
+                    $speakerNotesDepth = $reader->depth();
                 } elseif ($namespace === self::NS_DRAW && $name === 'page') {
                     $event = $pages++ > 0 ? 'paragraph' : null;
                 } elseif (! $spreadsheet && $namespace === self::NS_TABLE && isset(self::TABLE_EVENTS[$name])) {
@@ -260,6 +270,10 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
                 }
             } elseif ($type === XMLReader::END_ELEMENT) {
                 $closes = true;
+
+                if ($reader->depth() === $speakerNotesDepth) {
+                    $speakerNotesDepth = null;
+                }
             } elseif ($paragraphs > 0 && in_array($type, [XMLReader::TEXT, XMLReader::CDATA, XMLReader::WHITESPACE, XMLReader::SIGNIFICANT_WHITESPACE], true)) {
                 // ODF treats any run of white space inside a paragraph as a single space.
                 $chunk = (string) preg_replace('/[ \t\r\n]+/', ' ', $reader->value());
@@ -277,7 +291,9 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
             if ($closes) {
                 if ($namespace === self::NS_TEXT && ($name === 'p' || $name === 'h')) {
                     $paragraphs = max(0, $paragraphs - 1);
-                    $event = 'paragraph';
+                    // On a slide a blank line only ever separates two pages, so empty paragraphs
+                    // add no line there.
+                    $event = $presentation ? 'block' : 'paragraph';
                 } elseif ($namespace === self::NS_TEXT && $name === 'note' && $type === XMLReader::END_ELEMENT) {
                     $openNotes = max(0, $openNotes - 1);
                 } elseif (! $spreadsheet && $namespace === self::NS_TABLE && isset(self::TABLE_EVENTS[$name])) {
@@ -364,6 +380,7 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
             'tab' => $writer->tab(),
             'line' => $writer->lineBreak(),
             'paragraph' => $writer->paragraphEnd(),
+            'block' => $writer->blockEnd(),
             'table' => $writer->tableStart(),
             'table-end' => $writer->tableEnd(),
             'row' => $writer->rowStart(),
