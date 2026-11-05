@@ -11,6 +11,10 @@ namespace IntrAgile\TextExtractor\Process;
  * The cap is applied with "ulimit -v" because it limits the child alone: a container memory limit
  * covers the whole container, so one oversized input would otherwise take the PHP worker down with
  * it. Where the limit is not enforced (macOS, Windows) the tool simply runs uncapped.
+ *
+ * Each run gets a fresh, empty working directory. Tesseract, for one, treats an input it cannot
+ * decode as a list of file names, so a crafted upload could otherwise make it read files that
+ * happen to sit in the worker's current directory.
  */
 final class ProcessRunner
 {
@@ -28,11 +32,30 @@ final class ProcessRunner
      */
     public function run(array $command, int $timeoutSeconds, int $memoryMb, int $maxStdoutBytes): ProcessResult
     {
+        $directory = $this->createWorkingDirectory();
+
+        if ($directory === null) {
+            return new ProcessResult(null, '', 'A private working directory could not be created.', false, false);
+        }
+
+        try {
+            return $this->runIn($directory, $command, $timeoutSeconds, $memoryMb, $maxStdoutBytes);
+        } finally {
+            $this->removeWorkingDirectory($directory);
+        }
+    }
+
+    /**
+     * @param  list<string>  $command
+     */
+    private function runIn(string $directory, array $command, int $timeoutSeconds, int $memoryMb, int $maxStdoutBytes): ProcessResult
+    {
         $pipes = [];
         $process = @proc_open(
             $this->wrap($command, $memoryMb),
             [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
             $pipes,
+            $directory,
         );
 
         if (! is_resource($process)) {
@@ -117,6 +140,34 @@ final class ProcessRunner
         proc_close($process);
 
         return new ProcessResult($exitCode, $stdout, $stderr, $timedOut, $truncated);
+    }
+
+    private function createWorkingDirectory(): ?string
+    {
+        for ($attempt = 0; $attempt < 5; $attempt++) {
+            $directory = sys_get_temp_dir().DIRECTORY_SEPARATOR.'txx_run_'.bin2hex(random_bytes(8));
+
+            if (@mkdir($directory, 0700)) {
+                return $directory;
+            }
+        }
+
+        return null;
+    }
+
+    private function removeWorkingDirectory(string $directory): void
+    {
+        foreach (scandir($directory) ?: [] as $entry) {
+            if ($entry !== '.' && $entry !== '..') {
+                $path = $directory.DIRECTORY_SEPARATOR.$entry;
+
+                if (is_file($path) || is_link($path)) {
+                    @unlink($path);
+                }
+            }
+        }
+
+        @rmdir($directory);
     }
 
     /**

@@ -119,6 +119,16 @@ final class ProcessRunnerTest extends TestCase
         $this->assertFileDoesNotExist($marker);
     }
 
+    public function test_tools_run_in_an_empty_private_directory_that_is_removed_afterwards(): void
+    {
+        $result = (new ProcessRunner)->run($this->php('echo getcwd(), "|", count(scandir(".")), "|"; file_put_contents("left-behind.txt", "x");'), 10, 0, 4096);
+        [$directory, $entries] = explode('|', $result->stdout);
+
+        $this->assertNotSame(getcwd(), $directory);
+        $this->assertSame('2', $entries);
+        $this->assertDirectoryDoesNotExist($directory);
+    }
+
     public function test_missing_binary_is_a_failure_not_an_exception(): void
     {
         $result = (new ProcessRunner)->run(['/nonexistent/tool', 'x'], 5, 0, 1024);
