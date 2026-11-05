@@ -1,0 +1,74 @@
+{
+    "name": "intragile/php-text-extractor",
+    "description": "Extract plain text from PDF, DOCX, XLSX, PPTX, ODT, ODS, ODP, RTF, HTML, CSV and images with no Composer dependencies, bounded memory and a result that tells empty files from failures.",
+    "keywords": [
+        "text-extraction",
+        "text-extractor",
+        "extract-text",
+        "pdf-to-text",
+        "docx",
+        "xlsx",
+        "pptx",
+        "opendocument",
+        "rtf",
+        "ocr",
+        "tesseract",
+        "pdftotext",
+        "rag",
+        "search-index"
+    ],
+    "type": "library",
+    "license": "MIT",
+    "homepage": "https://intragile.eu",
+    "support": {
+        "issues": "https://github.com/intragile/php-text-extractor/issues",
+        "source": "https://github.com/intragile/php-text-extractor",
+        "security": "https://github.com/intragile/php-text-extractor/security/policy"
+    },
+    "authors": [
+        {
+            "name": "IntrAgile Kft.",
+            "email": "info@intragile.eu",
+            "homepage": "https://intragile.eu"
+        }
+    ],
+    "require": {
+        "php": "^8.1",
+        "ext-mbstring": "*"
+    },
+    "require-dev": {
+        "laravel/pint": "^1.0",
+        "phpstan/phpstan": "^2.0",
+        "phpunit/phpunit": "^10.5|^11.5|^12.0"
+    },
+    "suggest": {
+        "ext-zip": "Required for DOCX, XLSX, PPTX, ODT, ODS and ODP.",
+        "ext-xmlreader": "Required for XML, DOCX, XLSX, PPTX, ODT, ODS and ODP.",
+        "ext-dom": "Required for HTML."
+    },
+    "autoload": {
+        "psr-4": {
+            "IntrAgile\\TextExtractor\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "IntrAgile\\TextExtractor\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "branch-alias": {
+            "dev-main": "1.0.x-dev"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "analyse": "phpstan analyse --memory-limit=1G",
+        "format": "pint"
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
