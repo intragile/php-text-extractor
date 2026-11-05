@@ -190,6 +190,7 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
         $cellHasParagraph = false;
         $cellValue = '';
         $cellIso = null;
+        $cellTimeOfDay = null;
 
         $moved = $reader->read();
 
@@ -255,6 +256,7 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
                     $cellRepeat = self::count($reader->attribute('number-columns-repeated', self::NS_TABLE), self::MAX_REPEAT);
                     $cellValue = self::typedValue($reader);
                     $cellIso = self::isoValue($reader);
+                    $cellTimeOfDay = $cellIso === null ? self::timeOfDay($reader) : null;
                 }
             } elseif ($type === XMLReader::END_ELEMENT) {
                 $closes = true;
@@ -285,6 +287,10 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
                         $nestedTables -= $name === 'table' ? 1 : 0;
                     } elseif ($name === 'table-cell' && $cell !== null && $row !== null) {
                         $value = $cellIso ?? ($cellHasParagraph ? trim((string) preg_replace('/[\t\n]+/', ' ', $cell)) : $cellValue);
+
+                        if ($cellTimeOfDay !== null && self::showsTimeOfDay($value, $cellTimeOfDay)) {
+                            $value = $cellTimeOfDay;
+                        }
 
                         for ($i = 0; $value !== '' && $i < $cellRepeat; $i++) {
                             if ($rowBytes >= $maxBytes) {
@@ -395,8 +401,8 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
         if ($type === 'date') {
             $value = trim((string) $reader->attribute('date-value', self::NS_OFFICE));
 
-            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $value) === 1) {
-                return $value;
+            if (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $value, $match) === 1) {
+                return checkdate((int) $match[2], (int) $match[3], (int) $match[1]) ? $value : null;
             }
 
             if (preg_match('/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?$/', $value, $match) !== 1) {
@@ -429,6 +435,44 @@ final class OpenDocumentExtractor implements DeadlineAwareExtractor
         }
 
         return null;
+    }
+
+    /**
+     * The time of day of a time value of a day or more, as HH:MM:SS.
+     *
+     * LibreOffice stores a date and time shown with a time format as the hours since its epoch,
+     * which cannot be told apart from an elapsed duration by the value alone.
+     */
+    private static function timeOfDay(SafeXmlReader $reader): ?string
+    {
+        if ($reader->attribute('value-type', self::NS_OFFICE) !== 'time'
+            || preg_match('/^PT(\d{1,12})H(\d+)M(\d+(?:\.\d+)?)S$/', trim((string) $reader->attribute('time-value', self::NS_OFFICE)), $match) !== 1) {
+            return null;
+        }
+
+        $seconds = ((int) $match[1] * 3600 + (int) $match[2] * 60 + (int) round((float) $match[3])) % 86400;
+
+        return sprintf('%02d:%02d:%02d', intdiv($seconds, 3600), intdiv($seconds % 3600, 60), $seconds % 60);
+    }
+
+    /**
+     * Whether the displayed text is the given time of day (24- or 12-hour clock) rather than a
+     * duration such as "36:00".
+     */
+    private static function showsTimeOfDay(string $shown, string $time): bool
+    {
+        if (preg_match('/^(\d{1,2}):(\d{2})(?::(\d{2}))?(?:[.,]\d+)?\s*([AaPp][Mm]?)?$/', trim($shown), $match) !== 1) {
+            return false;
+        }
+
+        [$hours, $minutes] = [(int) substr($time, 0, 2), (int) substr($time, 3, 2)];
+        $shownHours = (int) $match[1];
+
+        if (isset($match[4])) {
+            $shownHours = $shownHours % 12 + (strtolower($match[4][0]) === 'p' ? 12 : 0);
+        }
+
+        return $shownHours === $hours && (int) $match[2] === $minutes;
     }
 
     /**

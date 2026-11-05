@@ -158,15 +158,29 @@ final class OpenDocumentExtractorTest extends TestCase
             .$cell('office:value-type="time" office:time-value="PT36H00M00S"', '36:00')
             .$cell('office:value-type="time" office:time-value="-PT01H00M00S"', '-1:00')
             .$cell('office:value-type="date" office:date-value="next week"', 'soon')
+            .$cell('office:value-type="date" office:date-value="2023-02-30"', 'bad day')
             .$cell('office:value-type="float" office:value="1234.5"', '1 234,50')
             .'</table:table-row>'
             .'</table:table></office:spreadsheet>');
 
-        $this->assertSame('## S
-'
-            .'2026-11-05	2025-01-31T14:30:00	2025-01-31T14:31:00	2026-01-01T00:00:00	14:30:00	07:05:09
-'
-            .'36:00	-1:00	soon	1 234,50', $result->text);
+        $this->assertSame("## S\n"
+            ."2026-11-05\t2025-01-31T14:30:00\t2025-01-31T14:31:00\t2026-01-01T00:00:00\t14:30:00\t07:05:09\n"
+            ."36:00\t-1:00\tsoon\tbad day\t1 234,50", $result->text);
+    }
+
+    public function test_ods_time_format_on_a_date_and_time_value_gives_the_time_of_day(): void
+    {
+        // LibreOffice writes a date and time shown with a time format as the hours since 1899-12-30.
+        $cell = static fn (string $value, string $shown): string => '<table:table-cell office:value-type="time" office:time-value="'.$value.'"><text:p>'.$shown.'</text:p></table:table-cell>';
+        $result = $this->extract(OdfFixtures::SPREADSHEET, '<office:spreadsheet><table:table table:name="S"><table:table-row>'
+            .$cell('PT1111954H30M00S', '10:30')
+            .$cell('PT1111954H30M00S', '10:30:00 AM')
+            .$cell('PT1111966H05M09S', '10:05:09 PM')
+            .$cell('PT36H00M00S', '36:00')
+            .$cell('PT1111954H30M00S', '1111954:30')
+            .'</table:table-row></table:table></office:spreadsheet>');
+
+        $this->assertSame("## S\n10:30:00\t10:30:00\t22:05:09\t36:00\t1111954:30", $result->text);
     }
 
     public function test_repeated_empty_cells_are_not_expanded(): void
