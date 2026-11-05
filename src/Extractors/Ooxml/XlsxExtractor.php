@@ -13,6 +13,7 @@ use IntrAgile\TextExtractor\Options;
 use IntrAgile\TextExtractor\Output\TextBuffer;
 use IntrAgile\TextExtractor\Reason;
 use IntrAgile\TextExtractor\Result;
+use IntrAgile\TextExtractor\Xml\MalformedXml;
 use IntrAgile\TextExtractor\Xml\SafeXmlReader;
 use XMLReader;
 
@@ -22,13 +23,15 @@ use XMLReader;
  * Each sheet is introduced by a "## <name>" line; a row becomes its non-empty cell values joined by
  * tabs, and line breaks inside a cell become spaces so that a row stays on one line. Cell positions
  * are deliberately not reconstructed, so sparse or padded sheets (millions of empty rows or cells)
- * produce no output instead of runs of empty separators. Values are emitted as stored: number
- * formats and styles are not applied, so dates appear as serial numbers.
+ * produce no output instead of runs of empty separators. Values are emitted as stored, except that
+ * numbers whose cell format is a date or time format are written in ISO 8601 form; other number
+ * formats are not applied.
  *
  * Memory is bounded by the output limit: cells are written to the buffer one by one rather than
  * assembled into rows (one long shared string referenced by every cell of a row would otherwise
  * multiply), every value is read only up to the remaining budget, and the shared-string table keeps
- * at most maxOutputBytes of text.
+ * at most maxOutputBytes of text. The cell-format table costs four bytes per entry and is capped
+ * like the shared-string table.
  */
 final class XlsxExtractor implements Extractor
 {
@@ -56,6 +59,12 @@ final class XlsxExtractor implements Extractor
      */
     private const UTF8_SLACK = 4;
 
+    /**
+     * Workbooks rarely define more than a few hundred custom number formats (Excel allows about
+     * 250), so this only stops hostile styles parts.
+     */
+    private const MAX_CUSTOM_NUMBER_FORMATS = 65_536;
+
     /** Enough for any shared-string index or other short scalar, even when the budget is spent. */
     private const MIN_VALUE_BYTES = 64;
 
@@ -76,13 +85,19 @@ final class XlsxExtractor implements Extractor
 
         try {
             $workbook = PartLocator::mainPart($zip, 'xl/workbook.xml') ?? throw new CorruptInput('The workbook part is missing.');
-            $sheets = $this->readSheetList($zip, $workbook, Relationships::parse($zip, PartLocator::relationshipsPath($workbook)));
+            $date1904 = false;
+            $sheets = $this->readSheetList($zip, $workbook, Relationships::parse($zip, PartLocator::relationshipsPath($workbook)), $date1904);
 
             $sharedStringsPath = PartLocator::byType($zip, $workbook, 'sharedStrings')[0] ?? self::sibling($workbook, 'sharedStrings.xml');
             $truncated = false;
             $sharedStrings = $zip->has($sharedStringsPath)
                 ? $this->readSharedStrings($zip, $sharedStringsPath, $options->maxOutputBytes, $truncated)
                 : new SharedStrings;
+
+            $stylesPath = PartLocator::byType($zip, $workbook, 'styles')[0] ?? self::sibling($workbook, 'styles.xml');
+            $formats = $zip->has($stylesPath)
+                ? $this->readCellFormats($zip, $stylesPath, $options->maxOutputBytes)
+                : new CellFormats;
 
             $buffer = new TextBuffer($options->maxOutputBytes);
             $first = true;
@@ -94,7 +109,7 @@ final class XlsxExtractor implements Extractor
 
                 $header = ($first ? '' : "\n").'## '.$name."\n";
 
-                if (! $this->readSheet($zip, $part, $sharedStrings, $buffer, $options->maxOutputBytes, $header)) {
+                if (! $this->readSheet($zip, $part, $sharedStrings, $formats, $date1904, $buffer, $options->maxOutputBytes, $header)) {
                     break;
                 }
 
@@ -111,16 +126,27 @@ final class XlsxExtractor implements Extractor
 
     /**
      * @param  array<string, string>  $targets  relationship id => part path
+     * @param  bool  $date1904  set to whether the workbook counts dates from 1904 instead of 1900
      * @return list<array{string, string}> sheet name and part path, in workbook order
      */
-    private function readSheetList(SafeZip $zip, string $workbook, array $targets): array
+    private function readSheetList(SafeZip $zip, string $workbook, array $targets, bool &$date1904): array
     {
         $reader = $zip->xmlReader($workbook);
         $sheets = [];
 
         try {
             while ($reader->read()) {
-                if ($reader->nodeType() !== XMLReader::ELEMENT || $reader->localName() !== 'sheet') {
+                if ($reader->nodeType() !== XMLReader::ELEMENT) {
+                    continue;
+                }
+
+                if ($reader->localName() === 'workbookPr') {
+                    $date1904 = in_array(strtolower(trim((string) $reader->attribute('date1904'))), ['1', 'true'], true);
+
+                    continue;
+                }
+
+                if ($reader->localName() !== 'sheet') {
                     continue;
                 }
 
@@ -185,13 +211,74 @@ final class XlsxExtractor implements Extractor
     }
 
     /**
+     * Reads the number formats and the cell formats (cellXfs) of the styles part. Styles only
+     * affect how numbers are shown, so a styles part that cannot be parsed is ignored as a whole
+     * and every number is written as stored.
+     *
+     * @throws ArchiveLimitExceeded when the part holds more formats than the bookkeeping budget allows
+     */
+    private function readCellFormats(SafeZip $zip, string $part, int $limit): CellFormats
+    {
+        $maxItems = max(self::MIN_SHARED_STRING_ITEMS, intdiv(min($limit, SharedStrings::MAX_TEXT_BYTES), 4));
+        $formats = new CellFormats;
+        $reader = $zip->xmlReader($part);
+        $cellXfsDepth = null;
+
+        try {
+            while ($reader->read()) {
+                $type = $reader->nodeType();
+
+                if ($type === XMLReader::END_ELEMENT && $reader->depth() === $cellXfsDepth) {
+                    $cellXfsDepth = null;
+
+                    continue;
+                }
+
+                if ($type !== XMLReader::ELEMENT) {
+                    continue;
+                }
+
+                $name = $reader->localName();
+
+                if ($name === 'numFmt') {
+                    if ($formats->customCount() >= self::MAX_CUSTOM_NUMBER_FORMATS) {
+                        throw new ArchiveLimitExceeded(sprintf('The styles part defines more than %d number formats.', self::MAX_CUSTOM_NUMBER_FORMATS));
+                    }
+
+                    $id = self::unsignedInt($reader->attribute('numFmtId'));
+
+                    if ($id !== null) {
+                        $formats->addNumberFormat($id, (string) $reader->attribute('formatCode'));
+                    }
+                } elseif ($name === 'cellXfs') {
+                    $cellXfsDepth = $reader->isEmptyElement() ? null : $reader->depth();
+                } elseif ($name === 'xf' && $cellXfsDepth !== null && $reader->depth() === $cellXfsDepth + 1) {
+                    if ($formats->count() >= $maxItems) {
+                        throw new ArchiveLimitExceeded(sprintf('The styles part holds more than %d cell formats.', $maxItems));
+                    }
+
+                    // Every xf keeps its position, as cells refer to it by index; a missing or
+                    // invalid id means General.
+                    $formats->addCellFormat(self::unsignedInt($reader->attribute('numFmtId')) ?? 0);
+                }
+            }
+        } catch (MalformedXml) {
+            return new CellFormats;
+        } finally {
+            $reader->close();
+        }
+
+        return $formats;
+    }
+
+    /**
      * Streams a worksheet into the buffer cell by cell. The header is written before the first
      * non-empty cell and is cleared once used, so the caller can tell whether the sheet produced
      * any output.
      *
      * @return bool false once the buffer is full
      */
-    private function readSheet(SafeZip $zip, string $part, SharedStrings $sharedStrings, TextBuffer $buffer, int $maxBytes, string &$header): bool
+    private function readSheet(SafeZip $zip, string $part, SharedStrings $sharedStrings, CellFormats $formats, bool $date1904, TextBuffer $buffer, int $maxBytes, string &$header): bool
     {
         $reader = $zip->xmlReader($part);
         $rowOpen = false;
@@ -205,7 +292,7 @@ final class XlsxExtractor implements Extractor
                         continue;
                     }
 
-                    $value = $this->readCell($reader, $sharedStrings, $maxBytes - strlen($buffer->toString()));
+                    $value = $this->readCell($reader, $sharedStrings, $formats, $date1904, $maxBytes - strlen($buffer->toString()));
 
                     if ($value === '') {
                         continue;
@@ -240,9 +327,10 @@ final class XlsxExtractor implements Extractor
      * Expects the reader on a non-empty <c> element and leaves it on the matching end tag. The
      * returned value may run a few bytes past $limit; the buffer makes the final cut.
      */
-    private function readCell(SafeXmlReader $reader, SharedStrings $sharedStrings, int $limit): string
+    private function readCell(SafeXmlReader $reader, SharedStrings $sharedStrings, CellFormats $formats, bool $date1904, int $limit): string
     {
         $type = $reader->attribute('t');
+        $style = self::unsignedInt($reader->attribute('s'));
         $depth = $reader->depth();
         $value = null;
         $inline = null;
@@ -286,6 +374,11 @@ final class XlsxExtractor implements Extractor
                     '0' => 'FALSE',
                     default => self::flattenLineBreaks((string) $value),
                 };
+            case null:
+            case 'n':
+                $date = $style === null ? null : SerialDate::format((string) $value, $formats->kindOf($style), $date1904);
+
+                return $date ?? self::flattenLineBreaks((string) $value);
             default:
                 return self::flattenLineBreaks((string) $value);
         }
@@ -366,6 +459,22 @@ final class XlsxExtractor implements Extractor
         }
 
         return $text.(strlen($chunk) > $room ? substr($chunk, 0, $room) : $chunk);
+    }
+
+    /**
+     * A plain non-negative decimal integer within 32 bits, or null.
+     */
+    private static function unsignedInt(?string $value): ?int
+    {
+        $value = trim((string) $value);
+
+        if ($value === '' || strlen($value) > 10 || ! ctype_digit($value)) {
+            return null;
+        }
+
+        $number = (int) $value;
+
+        return $number <= 0xFFFFFFFF ? $number : null;
     }
 
     private static function flattenLineBreaks(string $text): string
