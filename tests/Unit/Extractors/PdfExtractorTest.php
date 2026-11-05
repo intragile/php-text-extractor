@@ -15,6 +15,7 @@ use IntrAgile\TextExtractor\Status;
 use IntrAgile\TextExtractor\Tests\Support\Fixtures;
 use IntrAgile\TextExtractor\Tests\Support\TestCase;
 use IntrAgile\TextExtractor\TextExtractor;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class PdfExtractorTest extends TestCase
 {
@@ -112,6 +113,52 @@ final class PdfExtractorTest extends TestCase
 
         $this->assertSame(Status::NotExtractable, $result->status);
         $this->assertSame(Reason::Corrupt, $result->reason);
+    }
+
+    public function test_unknown_operator_on_a_blank_page_is_empty_without_a_text_layer(): void
+    {
+        $this->requirePdftotext();
+
+        $result = $this->extract('pdf/unknown-operator.pdf');
+
+        $this->assertSame(Status::Empty, $result->status);
+        $this->assertSame(Reason::NoTextLayer, $result->reason);
+    }
+
+    public function test_content_syntax_errors_alone_keep_a_page_without_text_empty(): void
+    {
+        $result = $this->runFake('echo "Syntax Error (12): Unknown operator \'foo\'" >&2; echo "Syntax Error (40): Too few (1) args to \'m\' operator" >&2; printf "\f"; exit 0');
+
+        $this->assertSame(Status::Empty, $result->status);
+        $this->assertSame(Reason::NoTextLayer, $result->reason);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function structuralErrors(): iterable
+    {
+        yield 'xref' => ["Syntax Error: Couldn't read xref table"];
+        yield 'trailer' => ["Syntax Error: Couldn't find trailer dictionary"];
+        yield 'not a pdf' => ['Syntax Error: May not be a PDF file (continuing anyway)'];
+        yield 'damaged stream' => ['Syntax Error (278): Unexpected end of file in flate stream'];
+    }
+
+    #[DataProvider('structuralErrors')]
+    public function test_structural_errors_without_text_are_corrupt(string $line): void
+    {
+        $result = $this->runFake('echo '.escapeshellarg($line).' >&2; printf "\f"; exit 0');
+
+        $this->assertSame(Status::NotExtractable, $result->status);
+        $this->assertSame(Reason::Corrupt, $result->reason);
+    }
+
+    public function test_truncation_cuts_on_a_character_boundary(): void
+    {
+        $result = $this->runFake("printf '\303\241\303\241\303\241\303\241\303\241'", new Options(maxOutputBytes: 5));
+
+        $this->assertTrue($result->truncated);
+        $this->assertSame('áá', $result->text);
     }
 
     public function test_missing_binary_is_failed_missing_tool(): void

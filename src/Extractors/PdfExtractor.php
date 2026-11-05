@@ -30,6 +30,14 @@ final class PdfExtractor implements Extractor
 
     private const MESSAGE_LIMIT = 500;
 
+    /**
+     * Syntax errors that mean the file itself is damaged: a broken cross-reference table or
+     * trailer, a header that is not a PDF, or a compressed stream that cannot be decoded. Errors
+     * in the content-stream operators (an unknown operator, a wrong argument count) are not among
+     * them; poppler skips the operator and valid generators produce such pages routinely.
+     */
+    private const STRUCTURAL_ERROR = "/^Syntax Error\\b.*(xref|trailer|couldn't (read|find)|may not be a pdf file|end of file in \\w+ stream|compression method|bad block)/im";
+
     public function __construct(
         private readonly ProcessRunner $runner,
         private readonly ToolLocator $locator,
@@ -48,11 +56,15 @@ final class PdfExtractor implements Extractor
             return Result::failed(Reason::MissingTool, Format::Pdf, 'pdftotext (poppler-utils) is not installed or not executable.');
         }
 
+        // One byte over the limit is enough to detect truncation; TextBuffer then cuts on a
+        // character boundary instead of leaving half of a multi-byte character behind.
+        $stdoutLimit = $options->maxOutputBytes < PHP_INT_MAX ? $options->maxOutputBytes + 1 : PHP_INT_MAX;
+
         $process = $this->runner->run(
             [$binary, '-enc', 'UTF-8', $path, '-'],
             $options->processTimeout,
             $options->processMemoryMb,
-            $options->maxOutputBytes,
+            $stdoutLimit,
         );
 
         if ($process->timedOut) {
@@ -102,8 +114,8 @@ final class PdfExtractor implements Extractor
      * No text with silent stderr is a document without a text layer. No text with diagnostics is
      * a failure, because that is how a run starved by the memory cap can look, unless every line
      * is one of poppler's parse diagnostics: those are deterministic, so retrying would never
-     * help. Warnings alone are common on valid scans and keep the file "no text layer"; a real
-     * syntax error means the content could not be read and the file is corrupt.
+     * help. Warnings and content-stream errors keep the file "no text layer"; only a structural
+     * error means the document could not be read and the file is corrupt.
      */
     private function classifyEmpty(ProcessResult $process): Result
     {
@@ -114,7 +126,7 @@ final class PdfExtractor implements Extractor
         }
 
         if (! self::isResourceFailure($stderr) && self::onlyParseErrors($stderr)) {
-            return preg_match('/^Syntax Error\b/m', $stderr) === 1
+            return preg_match(self::STRUCTURAL_ERROR, $stderr) === 1
                 ? Result::notExtractable(Reason::Corrupt, Format::Pdf, $this->message($process))
                 : Result::empty(Format::Pdf, Reason::NoTextLayer);
         }
