@@ -168,17 +168,24 @@ final class HtmlExtractorTest extends TestCase
         }
 
         // Every unterminated tag is a parse error; collecting them would cost about fifteen times
-        // the size of this 2.8 MB input.
+        // the size of this 2.8 MB input. The baseline for parsing a document of the same size
+        // differs between PHP versions, so the error-heavy run is compared with a clean one.
+        $clean = Fixtures::file(str_repeat('<div>ok</div>', 220_000), 'html');
         $path = Fixtures::file(str_repeat('<meta charset ', 200_000).'<p>text</p>', 'html');
         $previous = libxml_use_internal_errors(true);
 
         try {
             memory_reset_peak_usage();
             $before = memory_get_usage();
+            (new HtmlExtractor)->extract($clean, Format::Html, new Options);
+            $baseline = memory_get_peak_usage() - $before;
+
+            memory_reset_peak_usage();
+            $before = memory_get_usage();
             $result = (new HtmlExtractor)->extract($path, Format::Html, new Options);
 
             $this->assertSame(Status::Extracted, $result->status);
-            $this->assertLessThan(16 * 1048576, memory_get_peak_usage() - $before);
+            $this->assertLessThan(2 * $baseline + 1048576, memory_get_peak_usage() - $before);
             $this->assertSame([], libxml_get_errors());
             $this->assertTrue(libxml_use_internal_errors(true), 'The caller\'s libxml error mode is restored.');
         } finally {
