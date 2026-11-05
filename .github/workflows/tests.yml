@@ -1,0 +1,72 @@
+name: tests
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.2', '8.3', '8.4', '8.5']
+    name: PHP ${{ matrix.php }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-eng
+      - uses: shivammathur/setup-php@v2
+        with:
+          php: ${{ matrix.php }}
+          extensions: mbstring, zip, xmlreader, dom, pcntl
+          coverage: none
+      - run: composer update --prefer-dist --no-interaction --no-progress
+      - run: vendor/bin/phpunit
+      - run: vendor/bin/phpstan analyse --memory-limit=1G
+
+  pint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php: '8.3'
+          coverage: none
+      - run: composer update --prefer-dist --no-interaction --no-progress
+      - run: vendor/bin/pint --test
+
+  missing-dependencies:
+    # Without pdftotext, tesseract or ext-zip every affected file must come back as a Result
+    # (missing_tool / missing_extension), never as an exception.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php: '8.3'
+          extensions: mbstring, xmlreader, dom, :zip
+          coverage: none
+      - run: composer update --prefer-dist --no-interaction --no-progress
+      - name: Make sure the tools are absent
+        run: |
+          sudo apt-get remove -y poppler-utils tesseract-ocr || true
+          ! command -v pdftotext && ! command -v tesseract
+      - run: vendor/bin/phpunit
+        env:
+          TEXT_EXTRACTOR_EXPECT_NO_TOOLS: '1'
+          TEXT_EXTRACTOR_EXPECT_NO_ZIP: '1'
+
+  core-without-dev-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php: '8.1'
+          coverage: none
+      - run: composer install --no-dev --no-interaction --no-progress
+      - name: Extract a text file with only the runtime dependencies installed
+        run: |
+          printf 'hello' > /tmp/hello.txt
+          php -r 'require "vendor/autoload.php"; $r = IntrAgile\TextExtractor\TextExtractor::create()->extract("/tmp/hello.txt"); exit($r->text === "hello" ? 0 : 1);'
