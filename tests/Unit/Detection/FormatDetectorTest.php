@@ -161,4 +161,25 @@ final class FormatDetectorTest extends TestCase
     {
         $this->assertNull((new FormatDetector)->detect('/nonexistent/file.pdf'));
     }
+
+    public function test_text_content_contradicts_a_binary_extension(): void
+    {
+        $detector = new FormatDetector;
+
+        $this->assertSame(Format::Docx, $detector->contradictedFormat(Fixtures::file('', 'tmp'), 'report.docx'));
+        $this->assertSame(Format::Pdf, $detector->contradictedFormat(Fixtures::file('not a pdf', 'pdf')));
+        $this->assertSame(Format::Tiff, $detector->contradictedFormat(Fixtures::file('', 'TIF')));
+    }
+
+    public function test_matching_or_binary_content_does_not_contradict_the_extension(): void
+    {
+        $detector = new FormatDetector;
+
+        $this->assertNull($detector->contradictedFormat(Fixtures::file('', 'txt')));
+        $this->assertNull($detector->contradictedFormat(Fixtures::file('', 'rtf')));
+        $this->assertNull($detector->contradictedFormat(Fixtures::file("%PDF-1.4\n", 'docx')));
+        $this->assertNull($detector->contradictedFormat(Fixtures::file("\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1\0\0", 'docx')));
+        $this->assertNull($detector->contradictedFormat(Fixtures::zip(['a.txt' => 'a'], 'docx')));
+        $this->assertNull($detector->contradictedFormat('/nonexistent/file.pdf'));
+    }
 }
