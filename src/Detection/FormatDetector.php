@@ -21,6 +21,11 @@ final class FormatDetector
         'application/vnd.oasis.opendocument.text' => Format::Odt,
         'application/vnd.oasis.opendocument.spreadsheet' => Format::Ods,
         'application/vnd.oasis.opendocument.presentation' => Format::Odp,
+        // Writer/Web documents and templates share the layout of the document type they belong to.
+        'application/vnd.oasis.opendocument.text-web' => Format::Odt,
+        'application/vnd.oasis.opendocument.text-template' => Format::Odt,
+        'application/vnd.oasis.opendocument.spreadsheet-template' => Format::Ods,
+        'application/vnd.oasis.opendocument.presentation-template' => Format::Odp,
     ];
 
     private const OOXML_PARTS = [

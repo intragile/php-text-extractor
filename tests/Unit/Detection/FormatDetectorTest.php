@@ -56,6 +56,10 @@ final class FormatDetectorTest extends TestCase
         yield 'odt' => [['mimetype' => 'application/vnd.oasis.opendocument.text', 'content.xml' => '<x/>'], Format::Odt];
         yield 'ods' => [['mimetype' => 'application/vnd.oasis.opendocument.spreadsheet', 'content.xml' => '<x/>'], Format::Ods];
         yield 'odp' => [['mimetype' => 'application/vnd.oasis.opendocument.presentation', 'content.xml' => '<x/>'], Format::Odp];
+        yield 'odt web' => [['mimetype' => 'application/vnd.oasis.opendocument.text-web', 'content.xml' => '<x/>'], Format::Odt];
+        yield 'odt template' => [['mimetype' => 'application/vnd.oasis.opendocument.text-template', 'content.xml' => '<x/>'], Format::Odt];
+        yield 'ods template' => [['mimetype' => 'application/vnd.oasis.opendocument.spreadsheet-template', 'content.xml' => '<x/>'], Format::Ods];
+        yield 'odp template' => [['mimetype' => 'application/vnd.oasis.opendocument.presentation-template', 'content.xml' => '<x/>'], Format::Odp];
     }
 
     /**
