@@ -27,7 +27,7 @@ final class OptionsTest extends TestCase
         $this->assertNull($options->tesseractBinary);
         $this->assertSame('eng', $options->ocrLanguages);
         $this->assertSame('Windows-1252', $options->fallbackEncoding);
-        $this->assertSame(20971520, $options->maxHtmlBytes);
+        $this->assertSame(10485760, $options->maxHtmlBytes);
     }
 
     /**

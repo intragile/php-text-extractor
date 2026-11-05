@@ -45,7 +45,7 @@ final class Options
         public readonly ?string $tesseractBinary = null,
         public readonly string $ocrLanguages = 'eng',
         public readonly string $fallbackEncoding = 'Windows-1252',
-        public readonly int $maxHtmlBytes = 20971520,
+        public readonly int $maxHtmlBytes = 10485760,
     ) {
         foreach (self::POSITIVE as $name) {
             if ($this->{$name} < 1) {

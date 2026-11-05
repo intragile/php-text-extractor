@@ -162,7 +162,7 @@ $extractor = TextExtractor::create(new Options(
 | `maxArchiveEntryBytes` | 256 MiB | decompressed bytes allowed from one zip entry |
 | `maxArchiveTotalBytes` | 512 MiB | decompressed bytes allowed from one file |
 | `maxArchiveEntries` | 10 000 | entries allowed in one zip container |
-| `maxHtmlBytes` | 20 MiB | larger HTML is `too_large`; parsing it into a DOM costs many times its size |
+| `maxHtmlBytes` | 10 MiB | larger HTML is `too_large`; libxml builds the DOM in native memory, outside `memory_limit`: 10 MiB of dense markup peaks at about 400 MB RSS |
 | `maxImagePixels` | 16 000 000 | images with a larger page or frame are refused before OCR |
 | `processTimeout` | 60 s | per external tool run |
 | `processMemoryMb` | 512 | address-space cap per tool on Linux; `0` disables it |
