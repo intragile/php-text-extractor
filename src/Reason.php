@@ -15,6 +15,7 @@ enum Reason: string
     case MissingExtension = 'missing_extension';
     case MissingTool = 'missing_tool';
     case ToolTimeout = 'tool_timeout';
+    case ParseTimeout = 'parse_timeout';
     case ToolFailed = 'tool_failed';
     case InternalError = 'internal_error';
     case UnsupportedFormat = 'unsupported_format';
@@ -32,6 +33,7 @@ enum Reason: string
             self::MissingExtension,
             self::MissingTool,
             self::ToolTimeout,
+            self::ParseTimeout,
             self::ToolFailed,
             self::InternalError => Status::Failed,
 
