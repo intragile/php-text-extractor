@@ -114,4 +114,11 @@ final class OptionsTest extends TestCase
 
         new Options(fallbackEncoding: 'Klingon-1');
     }
+
+    public function test_built_in_code_pages_are_accepted_as_fallback_encoding(): void
+    {
+        foreach (['Windows-1250', 'Windows-1253', 'Windows-1255', 'Windows-1256', 'Windows-1257', 'Windows-1258', 'CP874', 'CP437'] as $encoding) {
+            $this->assertSame($encoding, (new Options(fallbackEncoding: $encoding))->fallbackEncoding);
+        }
+    }
 }
