@@ -17,8 +17,8 @@ use XMLReader;
  * Collects the character data of a generic XML document.
  *
  * Arbitrary XML carries no layout semantics, so text and CDATA nodes are simply joined with a
- * single space. Parsing goes through SafeXmlReader, which refuses any DOCTYPE and so prevents
- * external-entity disclosure.
+ * single space. Parsing goes through SafeXmlReader, which never loads external DTDs and refuses
+ * internal DTD subsets, and so prevents external-entity disclosure and entity expansion.
  */
 final class XmlExtractor implements Extractor
 {
@@ -33,7 +33,7 @@ final class XmlExtractor implements Extractor
             return Result::failed(Reason::MissingExtension, $format, 'ext-xmlreader is required to extract text from XML.');
         }
 
-        $reader = SafeXmlReader::fromUri($path);
+        $reader = SafeXmlReader::fromFile($path);
         $buffer = new TextBuffer($options->maxOutputBytes);
         $separator = '';
 

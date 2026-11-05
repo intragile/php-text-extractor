@@ -120,7 +120,98 @@ final class XlsxExtractorTest extends TestCase
 
         $this->assertSame(Status::Extracted, $result->status);
         $this->assertTrue($result->truncated);
-        $this->assertSame("## S\n".str_repeat('a', 60), $result->text);
+        $this->assertSame("## S\n".str_repeat('a', 60)."\n".str_repeat('b', 34), $result->text);
+    }
+
+    public function test_a_shared_string_longer_than_the_output_limit_is_cut_not_dropped(): void
+    {
+        $result = $this->extract(
+            XlsxFixtures::xlsx(['S' => '<row><c t="s"><v>0</v></c></row>'], [str_repeat('Lorem ipsum ', 20)]),
+            new Options(maxOutputBytes: 100),
+        );
+
+        $this->assertSame(Status::Extracted, $result->status);
+        $this->assertTrue($result->truncated);
+        $this->assertSame("## S\n".substr(str_repeat('Lorem ipsum ', 20), 0, 95), $result->text);
+    }
+
+    public function test_shared_strings_keep_their_indices_when_one_is_cut(): void
+    {
+        $rows = '<row><c t="s"><v>0</v></c><c t="s"><v>1</v></c><c t="s"><v>2</v></c></row>';
+        $shared = ['first', str_repeat('ő', 100), 'third'];
+
+        $result = $this->extract(XlsxFixtures::xlsx(['S' => $rows], $shared), new Options(maxOutputBytes: 120));
+
+        $this->assertTrue($result->truncated);
+        $this->assertTrue(mb_check_encoding($result->text, 'UTF-8'));
+        $this->assertSame("## S\nfirst\t".str_repeat('ő', 54), $result->text);
+        $this->assertStringNotContainsString('third', $result->text);
+    }
+
+    public function test_one_huge_shared_string_referenced_by_many_cells_stays_bounded(): void
+    {
+        $rows = '<row r="1">'.str_repeat('<c t="s"><v>0</v></c>', 300).'</row>';
+        $path = XlsxFixtures::xlsx(['S' => $rows], [str_repeat('A', 1_000_000)]);
+        $extractor = new TextExtractor(new Options(maxOutputBytes: 2_000_000), extractors: [new XlsxExtractor]);
+
+        $growth = self::peakGrowth(static function () use ($extractor, $path, &$result): void {
+            $result = $extractor->extract($path);
+        });
+
+        $this->assertInstanceOf(Result::class, $result);
+        $this->assertSame(Status::Extracted, $result->status);
+        $this->assertTrue($result->truncated);
+        $this->assertSame(2_000_000, strlen($result->text));
+        $this->assertLessThan(24 * 1024 * 1024, $growth);
+    }
+
+    public function test_huge_inline_strings_and_values_are_bounded_by_the_output_limit(): void
+    {
+        $text = str_repeat('x', 4_000_000);
+        $rows = '<row>'
+            .str_repeat('<c t="inlineStr"><is><t>'.$text.'</t><t>'.$text.'</t></is></c>', 3)
+            .'<c><v>'.str_repeat('<![CDATA['.$text.']]>', 3).'</v></c>'
+            .'</row>';
+        $path = XlsxFixtures::xlsx(['S' => $rows]);
+        unset($text, $rows);
+        $extractor = new TextExtractor(new Options(maxOutputBytes: 1000), extractors: [new XlsxExtractor]);
+
+        $growth = self::peakGrowth(static function () use ($extractor, $path, &$result): void {
+            $result = $extractor->extract($path);
+        });
+
+        $this->assertInstanceOf(Result::class, $result);
+        $this->assertTrue($result->truncated);
+        $this->assertSame(1000, strlen($result->text));
+        $this->assertLessThan(24 * 1024 * 1024, $growth);
+    }
+
+    public function test_millions_of_empty_shared_strings_hit_the_archive_limit(): void
+    {
+        $entries = XlsxFixtures::entries(['S' => '<row><c t="s"><v>0</v></c></row>']);
+        $entries['xl/sharedStrings.xml'] = '<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            .str_repeat('<si/>', 1_100_000).'</sst>';
+        $path = Fixtures::zip($entries, 'xlsx');
+        unset($entries);
+
+        $growth = self::peakGrowth(function () use ($path, &$result): void {
+            $result = $this->extract($path, new Options(maxOutputBytes: 1000));
+        });
+
+        $this->assertInstanceOf(Result::class, $result);
+        $this->assertSame(Status::NotExtractable, $result->status);
+        $this->assertSame(Reason::ArchiveLimitExceeded, $result->reason);
+        $this->assertLessThan(24 * 1024 * 1024, $growth);
+    }
+
+    public function test_line_breaks_inside_cells_become_spaces(): void
+    {
+        $rows = '<row><c t="s"><v>0</v></c><c t="inlineStr"><is><t>x&#13;&#10;y</t></is></c><c t="str"><v>p&#10;&#10;q</v></c></row>'
+            .'<row><c><v>2</v></c></row>';
+
+        $result = $this->extract(XlsxFixtures::xlsx(['S' => $rows], ["first\nsecond"]));
+
+        $this->assertSame("## S\nfirst second\tx y\tp  q\n2", $result->text);
     }
 
     public function test_output_stops_at_the_output_limit(): void
@@ -184,6 +275,18 @@ final class XlsxExtractorTest extends TestCase
 
         $this->assertSame(Status::NotExtractable, $result->status);
         $this->assertSame(Reason::Corrupt, $result->reason);
+    }
+
+    private static function peakGrowth(callable $work): int
+    {
+        if (function_exists('memory_reset_peak_usage')) {
+            memory_reset_peak_usage();
+        }
+
+        $before = memory_get_peak_usage();
+        $work();
+
+        return memory_get_peak_usage() - $before;
     }
 
     private function extract(string $path, ?Options $options = null): Result

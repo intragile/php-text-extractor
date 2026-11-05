@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace IntrAgile\TextExtractor\Extractors\Ooxml;
 
+use IntrAgile\TextExtractor\Archive\ArchiveLimitExceeded;
 use IntrAgile\TextExtractor\Archive\SafeZip;
 use IntrAgile\TextExtractor\Contracts\Extractor;
 use IntrAgile\TextExtractor\Exception\CorruptInput;
@@ -19,9 +20,15 @@ use XMLReader;
  * Streams the cell values of an Excel workbook (SpreadsheetML), one sheet after the other.
  *
  * Each sheet is introduced by a "## <name>" line; a row becomes its non-empty cell values joined by
- * tabs. Cell positions are deliberately not reconstructed, so sparse or padded sheets (millions of
- * empty rows or cells) produce no output instead of runs of empty separators. Values are emitted as
- * stored: number formats and styles are not applied, so dates appear as serial numbers.
+ * tabs, and line breaks inside a cell become spaces so that a row stays on one line. Cell positions
+ * are deliberately not reconstructed, so sparse or padded sheets (millions of empty rows or cells)
+ * produce no output instead of runs of empty separators. Values are emitted as stored: number
+ * formats and styles are not applied, so dates appear as serial numbers.
+ *
+ * Memory is bounded by the output limit: cells are written to the buffer one by one rather than
+ * assembled into rows (one long shared string referenced by every cell of a row would otherwise
+ * multiply), every value is read only up to the remaining budget, and the shared-string table keeps
+ * at most maxOutputBytes of text.
  */
 final class XlsxExtractor implements Extractor
 {
@@ -36,6 +43,21 @@ final class XlsxExtractor implements Extractor
         XMLReader::WHITESPACE,
         XMLReader::SIGNIFICANT_WHITESPACE,
     ];
+
+    /**
+     * Shared-string items allowed regardless of the output limit; above that, one item per four
+     * bytes of output limit. Either way the offset table stays within the output limit (or 4 MiB).
+     */
+    private const MIN_SHARED_STRING_ITEMS = 1_048_576;
+
+    /**
+     * Values are read a few bytes past the remaining budget so that the final cut can land on a
+     * UTF-8 character boundary.
+     */
+    private const UTF8_SLACK = 4;
+
+    /** Enough for any shared-string index or other short scalar, even when the budget is spent. */
+    private const MIN_VALUE_BYTES = 64;
 
     public function supports(Format $format): bool
     {
@@ -53,16 +75,14 @@ final class XlsxExtractor implements Extractor
         $zip = SafeZip::open($path, $options);
 
         try {
-            $workbook = $this->locateWorkbook($zip);
-            $workbookRels = self::relsPathFor($workbook);
-            $targets = Relationships::parse($zip, $workbookRels);
-            $sheets = $this->readSheetList($zip, $workbook, $targets);
+            $workbook = PartLocator::mainPart($zip, 'xl/workbook.xml') ?? throw new CorruptInput('The workbook part is missing.');
+            $sheets = $this->readSheetList($zip, $workbook, Relationships::parse($zip, PartLocator::relationshipsPath($workbook)));
 
-            $sharedStringsPath = $this->targetOfType($zip, $workbookRels, $targets, '/sharedStrings') ?? self::sibling($workbook, 'sharedStrings.xml');
+            $sharedStringsPath = PartLocator::byType($zip, $workbook, 'sharedStrings')[0] ?? self::sibling($workbook, 'sharedStrings.xml');
             $truncated = false;
             $sharedStrings = $zip->has($sharedStringsPath)
                 ? $this->readSharedStrings($zip, $sharedStringsPath, $options->maxOutputBytes, $truncated)
-                : [];
+                : new SharedStrings;
 
             $buffer = new TextBuffer($options->maxOutputBytes);
             $first = true;
@@ -74,7 +94,7 @@ final class XlsxExtractor implements Extractor
 
                 $header = ($first ? '' : "\n").'## '.$name."\n";
 
-                if (! $this->readSheet($zip, $part, $sharedStrings, $buffer, $header)) {
+                if (! $this->readSheet($zip, $part, $sharedStrings, $buffer, $options->maxOutputBytes, $header)) {
                     break;
                 }
 
@@ -87,21 +107,6 @@ final class XlsxExtractor implements Extractor
         }
 
         return Result::extracted($buffer->toString(), $format, $truncated || $buffer->isTruncated());
-    }
-
-    private function locateWorkbook(SafeZip $zip): string
-    {
-        $workbook = $this->targetOfType($zip, '_rels/.rels', Relationships::parse($zip, '_rels/.rels'), '/officeDocument');
-
-        if ($workbook !== null && $zip->has($workbook)) {
-            return $workbook;
-        }
-
-        if ($zip->has('xl/workbook.xml')) {
-            return 'xl/workbook.xml';
-        }
-
-        throw new CorruptInput('The workbook part is missing.');
     }
 
     /**
@@ -126,8 +131,7 @@ final class XlsxExtractor implements Extractor
                 }
 
                 if ($id !== null && isset($targets[$id])) {
-                    $name = str_replace(["\r\n", "\r", "\n"], ' ', (string) $reader->attribute('name'));
-                    $sheets[] = [$name, $targets[$id]];
+                    $sheets[] = [self::flattenLineBreaks((string) $reader->attribute('name')), $targets[$id]];
                 }
             }
         } finally {
@@ -138,16 +142,18 @@ final class XlsxExtractor implements Extractor
     }
 
     /**
-     * Stores string items until their cumulative size would exceed $limit, then stops reading;
-     * cells referencing an index past the end of the list resolve to ''.
+     * Keeps string items until their text reaches $limit bytes. The item crossing the limit is cut
+     * on a character boundary and reading stops there, so every kept item retains its index and
+     * cells referencing a later one resolve to ''.
      *
-     * @return list<string>
+     * @throws ArchiveLimitExceeded when the table holds more items than its bookkeeping budget allows
      */
-    private function readSharedStrings(SafeZip $zip, string $part, int $limit, bool &$truncated): array
+    private function readSharedStrings(SafeZip $zip, string $part, int $limit, bool &$truncated): SharedStrings
     {
+        $limit = min($limit, SharedStrings::MAX_TEXT_BYTES);
+        $maxItems = max(self::MIN_SHARED_STRING_ITEMS, intdiv($limit, 4));
+        $strings = new SharedStrings;
         $reader = $zip->xmlReader($part);
-        $strings = [];
-        $used = 0;
 
         try {
             while ($reader->read()) {
@@ -155,16 +161,21 @@ final class XlsxExtractor implements Extractor
                     continue;
                 }
 
-                $text = $reader->isEmptyElement() ? '' : $this->readStringItem($reader, $limit - $used);
+                if ($strings->count() >= $maxItems) {
+                    throw new ArchiveLimitExceeded(sprintf('The shared-string table holds more than %d items.', $maxItems));
+                }
 
-                if ($used + strlen($text) > $limit) {
+                $remaining = $limit - $strings->textBytes();
+                $text = $reader->isEmptyElement() ? '' : self::flattenLineBreaks($this->readStringItem($reader, $remaining));
+
+                if (strlen($text) > $remaining) {
+                    $strings->add(mb_strcut($text, 0, $remaining, 'UTF-8'));
                     $truncated = true;
 
                     break;
                 }
 
-                $used += strlen($text);
-                $strings[] = $text;
+                $strings->add($text);
             }
         } finally {
             $reader->close();
@@ -174,37 +185,46 @@ final class XlsxExtractor implements Extractor
     }
 
     /**
-     * Streams a worksheet into the buffer. The header is written before the first non-empty row
-     * and is cleared once used, so the caller can tell whether the sheet produced any output.
+     * Streams a worksheet into the buffer cell by cell. The header is written before the first
+     * non-empty cell and is cleared once used, so the caller can tell whether the sheet produced
+     * any output.
      *
-     * @param  list<string>  $sharedStrings
      * @return bool false once the buffer is full
      */
-    private function readSheet(SafeZip $zip, string $part, array $sharedStrings, TextBuffer $buffer, string &$header): bool
+    private function readSheet(SafeZip $zip, string $part, SharedStrings $sharedStrings, TextBuffer $buffer, int $maxBytes, string &$header): bool
     {
         $reader = $zip->xmlReader($part);
-        $cells = [];
+        $rowOpen = false;
 
         try {
             while ($reader->read()) {
                 $type = $reader->nodeType();
 
                 if ($type === XMLReader::ELEMENT && $reader->localName() === 'c') {
-                    $value = $reader->isEmptyElement() ? '' : $this->readCell($reader, $sharedStrings);
-
-                    if ($value !== '') {
-                        $cells[] = $value;
+                    if ($reader->isEmptyElement()) {
+                        continue;
                     }
+
+                    $value = $this->readCell($reader, $sharedStrings, $maxBytes - strlen($buffer->toString()));
+
+                    if ($value === '') {
+                        continue;
+                    }
+
+                    if (! $buffer->append($rowOpen ? "\t" : $header) || ! $buffer->append($value)) {
+                        return false;
+                    }
+
+                    $header = '';
+                    $rowOpen = true;
 
                     continue;
                 }
 
-                if ($type === XMLReader::END_ELEMENT && $reader->localName() === 'row' && $cells !== []) {
-                    $line = $header.implode("\t", $cells)."\n";
-                    $header = '';
-                    $cells = [];
+                if ($type === XMLReader::END_ELEMENT && $reader->localName() === 'row' && $rowOpen) {
+                    $rowOpen = false;
 
-                    if (! $buffer->append($line)) {
+                    if (! $buffer->append("\n")) {
                         return false;
                     }
                 }
@@ -217,11 +237,10 @@ final class XlsxExtractor implements Extractor
     }
 
     /**
-     * Expects the reader on a non-empty <c> element and leaves it on the matching end tag.
-     *
-     * @param  list<string>  $sharedStrings
+     * Expects the reader on a non-empty <c> element and leaves it on the matching end tag. The
+     * returned value may run a few bytes past $limit; the buffer makes the final cut.
      */
-    private function readCell(SafeXmlReader $reader, array $sharedStrings): string
+    private function readCell(SafeXmlReader $reader, SharedStrings $sharedStrings, int $limit): string
     {
         $type = $reader->attribute('t');
         $depth = $reader->depth();
@@ -240,9 +259,9 @@ final class XlsxExtractor implements Extractor
                 $name = $reader->localName();
 
                 if ($name === 'v') {
-                    $value = $reader->isEmptyElement() ? '' : $this->readElementText($reader);
+                    $value = $reader->isEmptyElement() ? '' : $this->readElementText($reader, max($limit, self::MIN_VALUE_BYTES));
                 } elseif ($name === 'is') {
-                    $inline = $reader->isEmptyElement() ? '' : $this->readStringItem($reader, PHP_INT_MAX);
+                    $inline = $reader->isEmptyElement() ? '' : $this->readStringItem($reader, $limit);
                 } else {
                     // Formulas and extension data are never part of the displayed value.
                     $moved = $reader->next();
@@ -258,24 +277,25 @@ final class XlsxExtractor implements Extractor
             case 's':
                 $index = trim((string) $value);
 
-                return ctype_digit($index) ? ($sharedStrings[(int) $index] ?? '') : '';
+                return ctype_digit($index) ? $sharedStrings->get((int) $index) : '';
             case 'inlineStr':
-                return $inline ?? (string) $value;
+                return self::flattenLineBreaks($inline ?? (string) $value);
             case 'b':
                 return match (trim((string) $value)) {
                     '1' => 'TRUE',
                     '0' => 'FALSE',
-                    default => (string) $value,
+                    default => self::flattenLineBreaks((string) $value),
                 };
             default:
-                return (string) $value;
+                return self::flattenLineBreaks((string) $value);
         }
     }
 
     /**
      * Concatenates the <t> runs of a rich-text item (<si> or <is>), leaving out phonetic (<rPh>)
      * guides. Expects the reader on a non-empty start tag and leaves it on the matching end tag.
-     * Text past $limit bytes is consumed but not kept.
+     * Keeps at most $limit plus a few bytes, so the caller can both detect and cleanly cut an
+     * overlong item; the rest is consumed but not kept.
      */
     private function readStringItem(SafeXmlReader $reader, int $limit): string
     {
@@ -303,8 +323,8 @@ final class XlsxExtractor implements Extractor
                 }
             } elseif ($nodeType === XMLReader::END_ELEMENT && $reader->depth() === $textDepth) {
                 $textDepth = null;
-            } elseif ($textDepth !== null && in_array($nodeType, self::TEXT_NODES, true) && strlen($text) <= $limit) {
-                $text .= $reader->value();
+            } elseif ($textDepth !== null && in_array($nodeType, self::TEXT_NODES, true)) {
+                $text = self::appendBounded($text, $reader->value(), $limit);
             }
 
             $moved = $reader->read();
@@ -314,9 +334,10 @@ final class XlsxExtractor implements Extractor
     }
 
     /**
-     * Expects the reader on a non-empty start tag and leaves it on the matching end tag.
+     * Expects the reader on a non-empty start tag and leaves it on the matching end tag. Keeps at
+     * most $limit plus a few bytes.
      */
-    private function readElementText(SafeXmlReader $reader): string
+    private function readElementText(SafeXmlReader $reader, int $limit): string
     {
         $depth = $reader->depth();
         $text = '';
@@ -329,53 +350,27 @@ final class XlsxExtractor implements Extractor
             }
 
             if (in_array($nodeType, self::TEXT_NODES, true)) {
-                $text .= $reader->value();
+                $text = self::appendBounded($text, $reader->value(), $limit);
             }
         }
 
         return $text;
     }
 
-    /**
-     * The relationships API resolves targets but drops the Type attribute, so the types are read
-     * separately and matched up by relationship id.
-     *
-     * @param  array<string, string>  $targets  relationship id => part path, as parsed from $relsPath
-     */
-    private function targetOfType(SafeZip $zip, string $relsPath, array $targets, string $typeSuffix): ?string
+    private static function appendBounded(string $text, string $chunk, int $limit): string
     {
-        if ($targets === [] || ! $zip->has($relsPath)) {
-            return null;
+        $room = max(0, $limit) + self::UTF8_SLACK - strlen($text);
+
+        if ($room <= 0) {
+            return $text;
         }
 
-        $reader = $zip->xmlReader($relsPath);
-
-        try {
-            while ($reader->read()) {
-                if ($reader->nodeType() !== XMLReader::ELEMENT || $reader->localName() !== 'Relationship') {
-                    continue;
-                }
-
-                $id = $reader->attribute('Id');
-
-                if ($id !== null && isset($targets[$id]) && str_ends_with((string) $reader->attribute('Type'), $typeSuffix)) {
-                    return $targets[$id];
-                }
-            }
-        } finally {
-            $reader->close();
-        }
-
-        return null;
+        return $text.(strlen($chunk) > $room ? substr($chunk, 0, $room) : $chunk);
     }
 
-    private static function relsPathFor(string $part): string
+    private static function flattenLineBreaks(string $text): string
     {
-        $slash = strrpos($part, '/');
-
-        return $slash === false
-            ? '_rels/'.$part.'.rels'
-            : substr($part, 0, $slash).'/_rels/'.substr($part, $slash + 1).'.rels';
+        return str_replace(["\r\n", "\r", "\n"], ' ', $text);
     }
 
     private static function sibling(string $part, string $name): string
