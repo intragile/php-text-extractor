@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace IntrAgile\TextExtractor\Tests\Support;
 
+use PHPUnit\Framework\SkippedWithMessageException;
 use RuntimeException;
 use ZipArchive;
 
@@ -53,6 +54,10 @@ final class OdfFixtures
     public static function package(string $mimetype, array $entries): string
     {
         $path = Fixtures::path(self::EXTENSIONS[$mimetype] ?? 'zip');
+        if (! class_exists(ZipArchive::class)) {
+            throw new SkippedWithMessageException('ext-zip is required to build this fixture.');
+        }
+
         $zip = new ZipArchive;
 
         if ($zip->open($path, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {

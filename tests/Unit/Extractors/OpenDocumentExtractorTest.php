@@ -18,6 +18,13 @@ use IntrAgile\TextExtractor\TextExtractor;
 
 final class OpenDocumentExtractorTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        if (! extension_loaded('zip') || ! extension_loaded('xmlreader')) {
+            $this->markTestSkipped('ext-zip and ext-xmlreader are required.');
+        }
+    }
+
     public function test_supports_the_opendocument_formats(): void
     {
         $extractor = new OpenDocumentExtractor;

@@ -127,9 +127,16 @@ final class TextExtractor
             return Result::notExtractable(Reason::UnsupportedFormat, null, 'The file format is not recognised.');
         }
 
+        // External tools run in their own working directory, so they need an absolute path.
+        $absolute = realpath($path);
+
+        if ($absolute === false) {
+            return Result::failed(Reason::Unreadable, $format, 'The file path cannot be resolved.');
+        }
+
         foreach ($this->extractors as $extractor) {
             if ($extractor->supports($format)) {
-                return $this->run($extractor, $path, $format);
+                return $this->run($extractor, $absolute, $format);
             }
         }
 
