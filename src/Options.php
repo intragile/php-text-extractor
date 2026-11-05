@@ -23,12 +23,14 @@ final class Options
         'maxArchiveEntries',
         'maxImagePixels',
         'processTimeout',
+        'maxHtmlBytes',
     ];
 
     /**
      * @param  int  $processMemoryMb  Address-space cap for each external tool; 0 disables the cap.
      * @param  string  $ocrLanguages  Tesseract language list, e.g. "hun+eng".
      * @param  string  $fallbackEncoding  Assumed encoding of text that is not valid UTF-8.
+     * @param  int  $maxHtmlBytes  Largest HTML document parsed; a DOM costs many times the file size.
      */
     public function __construct(
         public readonly int $maxInputBytes = 104857600,
@@ -43,6 +45,7 @@ final class Options
         public readonly ?string $tesseractBinary = null,
         public readonly string $ocrLanguages = 'eng',
         public readonly string $fallbackEncoding = 'Windows-1252',
+        public readonly int $maxHtmlBytes = 20971520,
     ) {
         foreach (self::POSITIVE as $name) {
             if ($this->{$name} < 1) {
@@ -78,7 +81,7 @@ final class Options
             }
         }
 
-        /** @var array{maxInputBytes: int, maxOutputBytes: int, maxArchiveEntryBytes: int, maxArchiveTotalBytes: int, maxArchiveEntries: int, maxImagePixels: int, processTimeout: int, processMemoryMb: int, pdftotextBinary: ?string, tesseractBinary: ?string, ocrLanguages: string, fallbackEncoding: string} $merged */
+        /** @var array{maxInputBytes: int, maxOutputBytes: int, maxArchiveEntryBytes: int, maxArchiveTotalBytes: int, maxArchiveEntries: int, maxImagePixels: int, processTimeout: int, processMemoryMb: int, pdftotextBinary: ?string, tesseractBinary: ?string, ocrLanguages: string, fallbackEncoding: string, maxHtmlBytes: int} $merged */
         $merged = array_merge($current, $overrides);
 
         return new self(...$merged);

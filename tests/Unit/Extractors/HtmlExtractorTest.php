@@ -7,6 +7,7 @@ namespace IntrAgile\TextExtractor\Tests\Unit\Extractors;
 use IntrAgile\TextExtractor\Extractors\HtmlExtractor;
 use IntrAgile\TextExtractor\Format;
 use IntrAgile\TextExtractor\Options;
+use IntrAgile\TextExtractor\Reason;
 use IntrAgile\TextExtractor\Result;
 use IntrAgile\TextExtractor\Status;
 use IntrAgile\TextExtractor\Tests\Support\Fixtures;
@@ -107,6 +108,92 @@ final class HtmlExtractorTest extends TestCase
         $this->assertTrue($result->truncated);
         $this->assertLessThanOrEqual(100, strlen($result->text));
         $this->assertTrue(mb_check_encoding($result->text, 'UTF-8'));
+    }
+
+    public function test_table_rows_are_lines_of_tab_separated_cells(): void
+    {
+        $html = '<html><body><p>Before</p><table><caption>Prices</caption>'
+            .'<thead><tr><th><p>Item</p></th><th><div>Price</div></th></tr></thead>'
+            .'<tbody><tr><td><p>Apple</p><p>red</p></td><td>1<br>EUR</td></tr>'
+            .'<tr><td></td><td><table><tr><td>in1</td><td>in2</td></tr><tr><td>in3</td></tr></table></td></tr>'
+            .'<tr><td> </td><td></td></tr></tbody></table><p>After</p></body></html>';
+
+        $this->assertSame("Before\nPrices\nItem\tPrice\nApple red\t1 EUR\n\tin1 in2 in3\nAfter", $this->extract($html)->text);
+    }
+
+    public function test_only_the_document_title_is_used(): void
+    {
+        $html = '<html><head><title>Real title</title></head><body>'
+            .'<svg><title>icon</title><text>drawn</text></svg><p>Body</p></body></html>';
+
+        $this->assertSame("Real title\ndrawn\nBody", $this->extract($html)->text);
+    }
+
+    public function test_svg_title_without_a_document_title_is_not_used_as_title(): void
+    {
+        $html = '<html><body><svg><title>icon</title></svg><p>Body</p></body></html>';
+
+        $this->assertSame('Body', $this->extract($html)->text);
+    }
+
+    public function test_meta_declared_utf16_is_treated_as_utf8(): void
+    {
+        $this->assertSame('plain ascii and ő', $this->extract('<html><head><meta charset="utf-16"></head><body><p>plain ascii and ő</p></body></html>')->text);
+        $this->assertSame('le', $this->extract('<html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-16LE"></head><body><p>le</p></body></html>')->text);
+    }
+
+    public function test_bom_detected_utf16_is_decoded(): void
+    {
+        $html = "\xFF\xFE".mb_convert_encoding('<html><head><meta charset="utf-16"></head><body><p>árvíztűrő</p></body></html>', 'UTF-16LE', 'UTF-8');
+
+        $this->assertSame('árvíztűrő', $this->extract($html)->text);
+    }
+
+    public function test_html_above_the_size_limit_is_not_extractable(): void
+    {
+        $path = Fixtures::file('<html><body><p>'.str_repeat('x', 200).'</p></body></html>', 'html');
+
+        $result = (new HtmlExtractor)->extract($path, Format::Html, new Options(maxHtmlBytes: 100));
+
+        $this->assertSame(Status::NotExtractable, $result->status);
+        $this->assertSame(Reason::TooLarge, $result->reason);
+        $this->assertSame(Format::Html, $result->format);
+        $this->assertSame(Status::Extracted, (new HtmlExtractor)->extract($path, Format::Html, new Options(maxHtmlBytes: 1000))->status);
+    }
+
+    public function test_parse_errors_are_not_collected_in_memory(): void
+    {
+        if (! function_exists('memory_reset_peak_usage')) {
+            $this->markTestSkipped('memory_reset_peak_usage() requires PHP 8.2.');
+        }
+
+        // Every unterminated tag is a parse error; collecting them would cost about fifteen times
+        // the size of this 2.8 MB input.
+        $path = Fixtures::file(str_repeat('<meta charset ', 200_000).'<p>text</p>', 'html');
+        $previous = libxml_use_internal_errors(true);
+
+        try {
+            memory_reset_peak_usage();
+            $before = memory_get_usage();
+            $result = (new HtmlExtractor)->extract($path, Format::Html, new Options);
+
+            $this->assertSame(Status::Extracted, $result->status);
+            $this->assertLessThan(16 * 1048576, memory_get_peak_usage() - $before);
+            $this->assertSame([], libxml_get_errors());
+            $this->assertTrue(libxml_use_internal_errors(true), 'The caller\'s libxml error mode is restored.');
+        } finally {
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+        }
+    }
+
+    public function test_extractor_keeps_no_state_between_calls(): void
+    {
+        $extractor = new HtmlExtractor;
+        $extractor->extract(Fixtures::file('<p>secret text</p>', 'html'), Format::Html, new Options);
+
+        $this->assertStringNotContainsString('secret', serialize((array) $extractor));
+        $this->assertSame('other', (new TextExtractor(extractors: [$extractor]))->extract(Fixtures::file('<p>other</p>', 'html'))->text);
     }
 
     private function extract(string $html): Result
