@@ -11,7 +11,12 @@ final class ToolLocator
 {
     private const EXTRA_DIRECTORIES = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
 
-    /** @var array<string, string|null> */
+    /**
+     * Only successful lookups are cached: a missing tool is a retryable failure, and a long-lived
+     * worker must notice once it has been installed.
+     *
+     * @var array<string, string>
+     */
     private array $cache = [];
 
     /**
@@ -21,11 +26,17 @@ final class ToolLocator
     {
         $key = $name."\0".($configured ?? '');
 
-        if (! array_key_exists($key, $this->cache)) {
-            $this->cache[$key] = $this->resolve($configured ?? $name);
+        if (isset($this->cache[$key])) {
+            return $this->cache[$key];
         }
 
-        return $this->cache[$key];
+        $path = $this->resolve($configured ?? $name);
+
+        if ($path !== null) {
+            $this->cache[$key] = $path;
+        }
+
+        return $path;
     }
 
     private function resolve(string $candidate): ?string

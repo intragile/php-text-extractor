@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace IntrAgile\TextExtractor\Tests\Unit;
 
+use ErrorException;
 use IntrAgile\TextExtractor\Archive\ArchiveLimitExceeded;
 use IntrAgile\TextExtractor\Contracts\Extractor;
 use IntrAgile\TextExtractor\Exception\CorruptInput;
@@ -16,6 +17,7 @@ use IntrAgile\TextExtractor\Tests\Support\Fixtures;
 use IntrAgile\TextExtractor\Tests\Support\TestCase;
 use IntrAgile\TextExtractor\TextExtractor;
 use InvalidArgumentException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Throwable;
 
@@ -230,6 +232,116 @@ final class TextExtractorTest extends TestCase
         fclose($stream);
 
         $this->assertSame($before, glob($pattern) ?: []);
+    }
+
+    public function test_truncated_text_that_normalises_to_nothing_is_not_reported_as_empty(): void
+    {
+        $result = TextExtractor::create()
+            ->withExtractor(self::extractorReturning(Result::extracted(" \n ", Format::Txt, true)))
+            ->extract(Fixtures::file('x', 'txt'));
+
+        $this->assertSame(Status::Extracted, $result->status);
+        $this->assertSame('', $result->text);
+        $this->assertTrue($result->truncated);
+    }
+
+    public function test_text_cut_to_nothing_by_the_output_limit_stays_truncated(): void
+    {
+        $result = TextExtractor::create(new Options(maxOutputBytes: 1))
+            ->withExtractor(self::extractorReturning(Result::extracted('ááá', Format::Txt)))
+            ->extract(Fixtures::file('x', 'txt'));
+
+        $this->assertSame(Status::Extracted, $result->status);
+        $this->assertSame('', $result->text);
+        $this->assertTrue($result->truncated);
+    }
+
+    public function test_unreadable_stream_is_failed_without_raising_errors(): void
+    {
+        $directory = fopen(sys_get_temp_dir(), 'rb');
+        $this->assertIsResource($directory);
+
+        $result = $this->withErrorsAsExceptions(static fn (): Result => TextExtractor::create()->extractFromStream($directory, 'a.txt'));
+        fclose($directory);
+
+        $this->assertSame(Status::Failed, $result->status);
+        $this->assertSame(Reason::Unreadable, $result->reason);
+    }
+
+    public function test_write_only_stream_is_reported_as_unreadable(): void
+    {
+        $stream = fopen(Fixtures::file('', 'txt'), 'wb');
+        $this->assertIsResource($stream);
+
+        $result = $this->withErrorsAsExceptions(static fn (): Result => TextExtractor::create()->extractFromStream($stream, 'a.txt'));
+        fclose($stream);
+
+        $this->assertSame(Reason::Unreadable, $result->reason);
+        $this->assertSame('The input stream cannot be read.', $result->message);
+    }
+
+    public function test_stream_is_read_when_the_input_limit_is_unbounded(): void
+    {
+        $stream = fopen('php://memory', 'w+b');
+        $this->assertIsResource($stream);
+        fwrite($stream, 'unbounded');
+        rewind($stream);
+
+        $result = TextExtractor::create(new Options(maxInputBytes: PHP_INT_MAX))->extractFromStream($stream, 'a.txt');
+        fclose($stream);
+
+        $this->assertSame('unbounded', $result->text);
+    }
+
+    /**
+     * @return iterable<string, array{string, string, Format}>
+     */
+    public static function binaryNamesWithTextContent(): iterable
+    {
+        yield 'empty docx' => ['', 'report.docx', Format::Docx];
+        yield 'empty pdf' => ['', 'scan.pdf', Format::Pdf];
+        yield 'empty xlsx' => ['', 'sheet.xlsx', Format::Xlsx];
+        yield 'text named pptx' => ['plain words', 'deck.pptx', Format::Pptx];
+        yield 'text named odt' => ['plain words', 'letter.odt', Format::Odt];
+        yield 'text named png' => ['plain words', 'photo.png', Format::Png];
+        yield 'empty jpg' => ['', 'photo.JPG', Format::Jpeg];
+    }
+
+    #[DataProvider('binaryNamesWithTextContent')]
+    public function test_binary_file_name_with_mismatching_content_is_corrupt(string $contents, string $name, Format $format): void
+    {
+        $result = TextExtractor::create()->extractFromString($contents, $name);
+
+        $this->assertSame(Status::NotExtractable, $result->status);
+        $this->assertSame(Reason::Corrupt, $result->reason);
+        $this->assertSame($format, $result->format);
+    }
+
+    public function test_misnamed_binary_content_still_wins_over_the_extension(): void
+    {
+        $result = TextExtractor::create()->extractFromString('{\\rtf1 hello}', 'report.docx');
+
+        $this->assertSame(Format::Rtf, $result->format);
+        $this->assertSame('hello', $result->text);
+    }
+
+    /**
+     * @template T
+     *
+     * @param  callable(): T  $callback
+     * @return T
+     */
+    private function withErrorsAsExceptions(callable $callback): mixed
+    {
+        set_error_handler(static function (int $severity, string $message, string $file, int $line): bool {
+            throw new ErrorException($message, 0, $severity, $file, $line);
+        });
+
+        try {
+            return $callback();
+        } finally {
+            restore_error_handler();
+        }
     }
 
     public function test_options_are_exposed(): void

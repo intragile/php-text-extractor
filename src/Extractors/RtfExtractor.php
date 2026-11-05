@@ -128,16 +128,13 @@ final class RtfExtractor implements Extractor
             return Result::failed(Reason::Unreadable, $format, 'The file cannot be read.');
         }
 
-        $this->reset($data, $options);
+        // The tokenizer state lives on a throwaway instance, so an extractor kept as a long-lived
+        // service never holds on to a document or up to maxOutputBytes of its text.
+        $parser = new self;
+        $parser->reset($data, $options);
+        $parser->parse();
 
-        try {
-            $this->parse();
-            $buffer = $this->buffer;
-        } finally {
-            $this->data = '';
-        }
-
-        return Result::extracted($buffer->toString(), $format, $buffer->isTruncated());
+        return Result::extracted($parser->buffer->toString(), $format, $parser->buffer->isTruncated());
     }
 
     private function reset(string $data, Options $options): void

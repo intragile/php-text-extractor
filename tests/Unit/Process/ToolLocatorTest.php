@@ -48,4 +48,17 @@ final class ToolLocatorTest extends TestCase
     {
         $this->assertNotNull((new ToolLocator)->find('pdftotext', 'sh'));
     }
+
+    public function test_a_tool_installed_after_a_failed_lookup_is_found(): void
+    {
+        $locator = new ToolLocator;
+        $path = Fixtures::path('sh');
+
+        $this->assertNull($locator->find('pdftotext', $path));
+
+        file_put_contents($path, "#!/bin/sh\nexit 0\n");
+        chmod($path, 0755);
+
+        $this->assertSame($path, $locator->find('pdftotext', $path));
+    }
 }

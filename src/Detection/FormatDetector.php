@@ -38,6 +38,22 @@ final class FormatDetector
         'odp' => Format::Odp,
     ];
 
+    /**
+     * Extensions of formats that are recognised by their bytes alone, never as text.
+     */
+    private const BINARY_EXTENSIONS = self::CONTAINER_EXTENSIONS + [
+        'pdf' => Format::Pdf,
+        'png' => Format::Png,
+        'jpg' => Format::Jpeg,
+        'jpeg' => Format::Jpeg,
+        'jpe' => Format::Jpeg,
+        'tif' => Format::Tiff,
+        'tiff' => Format::Tiff,
+        'bmp' => Format::Bmp,
+        'gif' => Format::Gif,
+        'webp' => Format::Webp,
+    ];
+
     private const TEXT_EXTENSIONS = [
         'txt' => Format::Txt,
         'text' => Format::Txt,
@@ -85,6 +101,32 @@ final class FormatDetector
         }
 
         return null;
+    }
+
+    /**
+     * Returns the binary format the file name claims when the content is plain text instead.
+     *
+     * An empty or text-only "report.docx" is a broken upload rather than a text document, and
+     * reporting it as an empty text file would hide the damage. Content that is binary in its own
+     * right (a misnamed PDF, a legacy Office file) is left to detect().
+     *
+     * @param  string|null  $filenameHint  Original file name, used when the path is a temporary file.
+     */
+    public function contradictedFormat(string $path, ?string $filenameHint = null): ?Format
+    {
+        $claimed = self::BINARY_EXTENSIONS[strtolower(pathinfo($filenameHint ?? $path, PATHINFO_EXTENSION))] ?? null;
+
+        if ($claimed === null || ! is_file($path) || ! is_readable($path)) {
+            return null;
+        }
+
+        $head = @file_get_contents($path, false, null, 0, self::SNIFF_BYTES);
+
+        if ($head === false || $this->detectSignature($head) !== null || strncmp($head, "PK\x03\x04", 4) === 0) {
+            return null;
+        }
+
+        return $this->looksLikeText($head) ? $claimed : null;
     }
 
     private function detectSignature(string $head): ?Format

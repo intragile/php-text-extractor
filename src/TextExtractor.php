@@ -121,6 +121,12 @@ final class TextExtractor
             return Result::notExtractable(Reason::TooLarge, null, sprintf('The file is %d bytes; the limit is %d.', $size, $this->options->maxInputBytes));
         }
 
+        $claimed = $this->detector->contradictedFormat($path, $filenameHint);
+
+        if ($claimed !== null) {
+            return Result::notExtractable(Reason::Corrupt, $claimed, sprintf('The file name says %s, but the content is empty or plain text.', $claimed->value));
+        }
+
         $format = $this->detector->detect($path, $filenameHint);
 
         if ($format === null) {
@@ -150,7 +156,9 @@ final class TextExtractor
         }
 
         return $this->withTemporaryFile(
-            static fn (string $path): bool => file_put_contents($path, $contents) === strlen($contents),
+            static fn (string $path): ?string => file_put_contents($path, $contents) === strlen($contents)
+                ? null
+                : 'The input cannot be written to a temporary file.',
             $filenameHint,
         );
     }
@@ -167,52 +175,64 @@ final class TextExtractor
         }
 
         $limit = $this->options->maxInputBytes;
+        // One byte over the limit is enough to tell an oversized stream from one exactly at it.
+        $readLimit = $limit < PHP_INT_MAX ? $limit + 1 : PHP_INT_MAX;
         $tooLarge = false;
 
-        $result = $this->withTemporaryFile(
-            static function (string $path) use ($stream, $limit, &$tooLarge): bool {
+        return $this->withTemporaryFile(
+            static function (string $path) use ($stream, $limit, $readLimit, &$tooLarge): ?string {
                 $target = fopen($path, 'wb');
 
                 if ($target === false) {
-                    return false;
+                    return 'The input cannot be written to a temporary file.';
                 }
 
                 try {
-                    $copied = stream_copy_to_stream($stream, $target, $limit + 1);
+                    $copied = stream_copy_to_stream($stream, $target, $readLimit);
                 } finally {
                     fclose($target);
                 }
 
                 if ($copied === false) {
-                    return false;
+                    return 'The input stream cannot be read.';
                 }
 
                 $tooLarge = $copied > $limit;
 
-                return true;
+                return null;
             },
             $filenameHint,
             static fn (): bool => $tooLarge,
         );
-
-        return $result;
     }
 
     /**
-     * @param  callable(string): bool  $fill
+     * Copies the input into a temporary file and extracts from that.
+     *
+     * The IO runs under a local error handler: applications commonly turn warnings into
+     * exceptions, and a stream that cannot be read is a problem with the input, which must come
+     * back as a Result rather than escape as an ErrorException.
+     *
+     * @param  callable(string): ?string  $fill  Returns null on success, otherwise the failure message.
      * @param  (callable(): bool)|null  $isTooLarge
      */
     private function withTemporaryFile(callable $fill, ?string $filenameHint, ?callable $isTooLarge = null): Result
     {
-        $path = tempnam(sys_get_temp_dir(), self::TEMP_PREFIX);
+        $path = false;
+        set_error_handler(static fn (): bool => true);
 
-        if ($path === false) {
-            return Result::failed(Reason::Unreadable, null, 'A temporary file cannot be created.');
+        try {
+            $path = tempnam(sys_get_temp_dir(), self::TEMP_PREFIX);
+            $failure = $path === false ? 'A temporary file cannot be created.' : $fill($path);
+        } catch (Throwable $exception) {
+            $failure = 'The input cannot be copied to a temporary file: '.$exception->getMessage();
+        } finally {
+            restore_error_handler();
         }
 
         try {
-            if (! $fill($path)) {
-                return Result::failed(Reason::Unreadable, null, 'The input cannot be written to a temporary file.');
+            if ($failure !== null || $path === false) {
+                return Result::failed(Reason::Unreadable, null, $failure);
             }
 
             if ($isTooLarge !== null && $isTooLarge()) {
@@ -221,7 +241,7 @@ final class TextExtractor
 
             return $this->extract($path, $filenameHint);
         } finally {
-            if (is_file($path)) {
+            if (is_string($path) && is_file($path)) {
                 @unlink($path);
             }
         }
@@ -251,7 +271,9 @@ final class TextExtractor
             $truncated = true;
         }
 
-        if ($text === '') {
+        // Text that did not fit is still text: reporting it as Empty would tell the caller the
+        // document has nothing in it.
+        if ($text === '' && ! $truncated) {
             return Result::empty($result->format ?? $format);
         }
 
