@@ -4,13 +4,14 @@ declare(strict_types=1);
 
 namespace IntrAgile\TextExtractor\Extractors;
 
-use IntrAgile\TextExtractor\Contracts\Extractor;
 use IntrAgile\TextExtractor\Format;
 use IntrAgile\TextExtractor\Options;
 use IntrAgile\TextExtractor\Output\Encoding;
 use IntrAgile\TextExtractor\Output\TextBuffer;
 use IntrAgile\TextExtractor\Reason;
 use IntrAgile\TextExtractor\Result;
+use IntrAgile\TextExtractor\Support\Deadline;
+use IntrAgile\TextExtractor\Support\DeadlineAwareExtractor;
 
 /**
  * Extracts the visible text of an RTF document with a single-pass tokenizer.
@@ -19,7 +20,7 @@ use IntrAgile\TextExtractor\Result;
  * restored when a group closes. Malformed input is handled on a best-effort basis: unbalanced
  * braces, truncated escapes and oversized \bin lengths are tolerated rather than reported.
  */
-final class RtfExtractor implements Extractor
+final class RtfExtractor implements DeadlineAwareExtractor
 {
     /**
      * Deeper groups share the state of the deepest tracked one, which bounds memory on hostile input.
@@ -122,6 +123,11 @@ final class RtfExtractor implements Extractor
 
     public function extract(string $path, Format $format, Options $options): Result
     {
+        return $this->extractWithin($path, $format, $options, Deadline::fromOptions($options));
+    }
+
+    public function extractWithin(string $path, Format $format, Options $options, Deadline $deadline): Result
+    {
         $data = @file_get_contents($path);
 
         if ($data === false) {
@@ -132,7 +138,7 @@ final class RtfExtractor implements Extractor
         // service never holds on to a document or up to maxOutputBytes of its text.
         $parser = new self;
         $parser->reset($data, $options);
-        $parser->parse();
+        $parser->parse($deadline);
 
         return Result::extracted($parser->buffer->toString(), $format, $parser->buffer->isTruncated());
     }
@@ -162,9 +168,10 @@ final class RtfExtractor implements Extractor
         $this->fontCodepages = [];
     }
 
-    private function parse(): void
+    private function parse(Deadline $deadline): void
     {
         while ($this->pos < $this->length && ! $this->full) {
+            $deadline->tick();
             $char = $this->data[$this->pos];
 
             if ($char === '{') {

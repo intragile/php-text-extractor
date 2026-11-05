@@ -4,12 +4,13 @@ declare(strict_types=1);
 
 namespace IntrAgile\TextExtractor\Extractors;
 
-use IntrAgile\TextExtractor\Contracts\Extractor;
 use IntrAgile\TextExtractor\Format;
 use IntrAgile\TextExtractor\Options;
 use IntrAgile\TextExtractor\Output\TextBuffer;
 use IntrAgile\TextExtractor\Reason;
 use IntrAgile\TextExtractor\Result;
+use IntrAgile\TextExtractor\Support\Deadline;
+use IntrAgile\TextExtractor\Support\DeadlineAwareExtractor;
 use IntrAgile\TextExtractor\Xml\SafeXmlReader;
 use XMLReader;
 
@@ -20,7 +21,7 @@ use XMLReader;
  * single space. Parsing goes through SafeXmlReader, which never loads external DTDs and refuses
  * internal DTD subsets, and so prevents external-entity disclosure and entity expansion.
  */
-final class XmlExtractor implements Extractor
+final class XmlExtractor implements DeadlineAwareExtractor
 {
     public function supports(Format $format): bool
     {
@@ -29,11 +30,16 @@ final class XmlExtractor implements Extractor
 
     public function extract(string $path, Format $format, Options $options): Result
     {
+        return $this->extractWithin($path, $format, $options, Deadline::fromOptions($options));
+    }
+
+    public function extractWithin(string $path, Format $format, Options $options, Deadline $deadline): Result
+    {
         if (! extension_loaded('xmlreader')) {
             return Result::failed(Reason::MissingExtension, $format, 'ext-xmlreader is required to extract text from XML.');
         }
 
-        $reader = SafeXmlReader::fromFile($path);
+        $reader = SafeXmlReader::fromFile($path, $deadline);
         $buffer = new TextBuffer($options->maxOutputBytes);
         $separator = '';
 

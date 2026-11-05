@@ -4,13 +4,14 @@ declare(strict_types=1);
 
 namespace IntrAgile\TextExtractor\Extractors;
 
-use IntrAgile\TextExtractor\Contracts\Extractor;
 use IntrAgile\TextExtractor\Format;
 use IntrAgile\TextExtractor\Options;
 use IntrAgile\TextExtractor\Output\Encoding;
 use IntrAgile\TextExtractor\Output\TextBuffer;
 use IntrAgile\TextExtractor\Reason;
 use IntrAgile\TextExtractor\Result;
+use IntrAgile\TextExtractor\Support\Deadline;
+use IntrAgile\TextExtractor\Support\DeadlineAwareExtractor;
 
 /**
  * Reads text files in chunks, decoding them to UTF-8.
@@ -18,7 +19,7 @@ use IntrAgile\TextExtractor\Result;
  * The encoding is decided once from the start of the file (BOM, then UTF-8 validity, then the
  * configured fallback) so that a file is never decoded with two different code pages.
  */
-final class PlainTextExtractor implements Extractor
+final class PlainTextExtractor implements DeadlineAwareExtractor
 {
     private const CHUNK = 65536;
 
@@ -28,6 +29,11 @@ final class PlainTextExtractor implements Extractor
     }
 
     public function extract(string $path, Format $format, Options $options): Result
+    {
+        return $this->extractWithin($path, $format, $options, Deadline::fromOptions($options));
+    }
+
+    public function extractWithin(string $path, Format $format, Options $options, Deadline $deadline): Result
     {
         $handle = @fopen($path, 'rb');
 
@@ -55,6 +61,9 @@ final class PlainTextExtractor implements Extractor
                     break;
                 }
 
+                // Decoding a chunk through a code page table is the costly step, so one clock
+                // reading per chunk is cheap by comparison.
+                $deadline->check();
                 $chunk = (string) fread($handle, self::CHUNK);
             }
         } finally {

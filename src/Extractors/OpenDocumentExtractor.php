@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace IntrAgile\TextExtractor\Extractors;
 
 use IntrAgile\TextExtractor\Archive\SafeZip;
-use IntrAgile\TextExtractor\Contracts\Extractor;
 use IntrAgile\TextExtractor\Exception\CorruptInput;
 use IntrAgile\TextExtractor\Format;
 use IntrAgile\TextExtractor\Options;
@@ -13,6 +12,8 @@ use IntrAgile\TextExtractor\Output\LayoutWriter;
 use IntrAgile\TextExtractor\Output\TextBuffer;
 use IntrAgile\TextExtractor\Reason;
 use IntrAgile\TextExtractor\Result;
+use IntrAgile\TextExtractor\Support\Deadline;
+use IntrAgile\TextExtractor\Support\DeadlineAwareExtractor;
 use IntrAgile\TextExtractor\Xml\SafeXmlReader;
 use XMLReader;
 
@@ -24,7 +25,7 @@ use XMLReader;
  * never expanded from their repeat counts: a single row element may legally stand for millions of
  * blank rows, so only cells with content are repeated, and only up to a fixed cap.
  */
-final class OpenDocumentExtractor implements Extractor
+final class OpenDocumentExtractor implements DeadlineAwareExtractor
 {
     private const NS_OFFICE = 'urn:oasis:names:tc:opendocument:xmlns:office:1.0';
 
@@ -90,13 +91,18 @@ final class OpenDocumentExtractor implements Extractor
 
     public function extract(string $path, Format $format, Options $options): Result
     {
+        return $this->extractWithin($path, $format, $options, Deadline::fromOptions($options));
+    }
+
+    public function extractWithin(string $path, Format $format, Options $options, Deadline $deadline): Result
+    {
         foreach (['zip', 'xmlreader'] as $extension) {
             if (! extension_loaded($extension)) {
                 return Result::failed(Reason::MissingExtension, $format, sprintf('ext-%s is required to read OpenDocument files.', $extension));
             }
         }
 
-        $zip = SafeZip::open($path, $options);
+        $zip = SafeZip::open($path, $options, $deadline);
 
         try {
             // An encrypted content.xml is ciphertext, so this must be decided before parsing it.

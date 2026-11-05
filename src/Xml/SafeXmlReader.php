@@ -6,6 +6,8 @@ namespace IntrAgile\TextExtractor\Xml;
 
 use Closure;
 use IntrAgile\TextExtractor\Archive\ArchiveLimitExceeded;
+use IntrAgile\TextExtractor\Support\Deadline;
+use IntrAgile\TextExtractor\Support\ParseTimedOut;
 use LogicException;
 use XMLReader;
 
@@ -20,6 +22,9 @@ use XMLReader;
  * Only fatal (well-formedness) errors reject a document. Recoverable ones such as an undeclared
  * namespace prefix are ignored, and libxml's error list is drained after every step so that a
  * document producing millions of them cannot exhaust memory.
+ *
+ * Every step counts against an optional parse deadline, which covers every extractor built on
+ * this reader.
  */
 final class SafeXmlReader
 {
@@ -33,6 +38,7 @@ final class SafeXmlReader
         private readonly XMLReader $reader,
         private readonly bool $previousErrorMode,
         private readonly ?Closure $limitExceeded,
+        private readonly ?Deadline $deadline,
     ) {
         $reader->setParserProperty(XMLReader::LOADDTD, false);
         $reader->setParserProperty(XMLReader::DEFAULTATTRS, false);
@@ -43,7 +49,7 @@ final class SafeXmlReader
     /**
      * @param  Closure(): bool|null  $limitExceeded  Reports whether an underlying byte budget ran out.
      */
-    public static function fromUri(string $uri, ?Closure $limitExceeded = null): self
+    public static function fromUri(string $uri, ?Closure $limitExceeded = null, ?Deadline $deadline = null): self
     {
         self::requireExtension();
         $previous = libxml_use_internal_errors(true);
@@ -56,19 +62,19 @@ final class SafeXmlReader
             throw new MalformedXml('The XML document cannot be opened.');
         }
 
-        return new self($reader, $previous, $limitExceeded);
+        return new self($reader, $previous, $limitExceeded, $deadline);
     }
 
     /**
      * Opens a local file by path. The path is handed to libxml as an escaped file:// URI, so
      * neither percent sequences nor stream-wrapper prefixes in the name are interpreted.
      */
-    public static function fromFile(string $path): self
+    public static function fromFile(string $path, ?Deadline $deadline = null): self
     {
-        return self::fromUri(self::fileUri($path));
+        return self::fromUri(self::fileUri($path), null, $deadline);
     }
 
-    public static function fromString(string $xml): self
+    public static function fromString(string $xml, ?Deadline $deadline = null): self
     {
         self::requireExtension();
 
@@ -86,7 +92,7 @@ final class SafeXmlReader
             throw new MalformedXml('The XML document cannot be parsed.');
         }
 
-        return new self($reader, $previous, null);
+        return new self($reader, $previous, null, $deadline);
     }
 
     /**
@@ -94,9 +100,20 @@ final class SafeXmlReader
      *
      * @throws MalformedXml when the document is not well-formed or declares a DOCTYPE
      * @throws ArchiveLimitExceeded when the underlying archive entry ran over its byte budget
+     * @throws ParseTimedOut when the parse deadline has passed
      */
     public function read(): bool
     {
+        if ($this->deadline !== null) {
+            try {
+                $this->deadline->tick();
+            } catch (ParseTimedOut $timeout) {
+                $this->close();
+
+                throw $timeout;
+            }
+        }
+
         return $this->advance(@$this->reader->read());
     }
 
