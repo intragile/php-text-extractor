@@ -163,7 +163,7 @@ $extractor = TextExtractor::create(new Options(
 | `maxArchiveEntryBytes` | 256 MiB | decompressed bytes allowed from one zip entry |
 | `maxArchiveTotalBytes` | 512 MiB | decompressed bytes allowed from one file |
 | `maxArchiveEntries` | 10 000 | entries allowed in one zip container |
-| `maxHtmlBytes` | 10 MiB | larger HTML is `too_large`; libxml builds the DOM in native memory, outside `memory_limit`: 10 MiB of dense markup peaks at about 400 MB RSS |
+| `maxHtmlBytes` | 10 MiB | larger HTML is `too_large`; libxml builds the DOM in native memory, outside `memory_limit`: 10 MiB of dense markup peaks at about 460 MB RSS on Linux (160 MB for plain prose) |
 | `maxImagePixels` | 16 000 000 | images with a larger page or frame are refused before OCR |
 | `processTimeout` | 60 s | per external tool run |
 | `maxParseSeconds` | 60 s | parsing done in PHP (XML, OOXML, OpenDocument, RTF, text, CSV, HTML) for one call; over it the result is `Failed` / `parse_timeout` |

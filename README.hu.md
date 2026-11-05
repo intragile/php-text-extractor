@@ -165,7 +165,7 @@ $extractor = TextExtractor::create(new Options(
 | `maxArchiveEntryBytes` | 256 MiB | egy zip-bejegyzésből kicsomagolható bájtok |
 | `maxArchiveTotalBytes` | 512 MiB | egy fájlból összesen kicsomagolható bájtok |
 | `maxArchiveEntries` | 10 000 | ennyi bejegyzés lehet egy zip-konténerben |
-| `maxHtmlBytes` | 10 MiB | a nagyobb HTML `too_large`; a libxml a DOM-ot natív memóriában, a `memory_limit`-en kívül építi fel: 10 MiB sűrű markup csúcsa kb. 400 MB RSS |
+| `maxHtmlBytes` | 10 MiB | a nagyobb HTML `too_large`; a libxml a DOM-ot natív memóriában, a `memory_limit`-en kívül építi fel: 10 MiB sűrű markup csúcsa Linuxon kb. 460 MB RSS (folyó szövegnél 160 MB) |
 | `maxImagePixels` | 16 000 000 | ha egy oldal vagy képkocka nagyobb, OCR előtt visszautasítja |
 | `processTimeout` | 60 s | külső eszközönként |
 | `maxParseSeconds` | 60 s | a PHP-ban futó feldolgozás (XML, OOXML, OpenDocument, RTF, szöveg, CSV, HTML) egy hívásra; felette az eredmény `Failed` / `parse_timeout` |
