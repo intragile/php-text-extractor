@@ -124,13 +124,10 @@ final class CellFormats
             return self::DURATION;
         }
 
-        $tokens = preg_replace([
-            '/"[^"]*"?/',          // quoted literal text
-            '/\\\\./s',            // backslash-escaped character
-            '/[_*]./s',            // _x pads with the width of x, *x repeats x
-            '/\[[^\]]*\]?/',       // colours, conditions and locale tags
-            '/AM\/PM|A\/P/i',      // the 12-hour marker, which implies an h token anyway
-        ], '', $formatCode) ?? '';
+        // Literal parts are removed in a single left-to-right pass, so that an escaped quote does
+        // not open a quoted section: quoted text, a backslash-escaped character, _x and *x padding,
+        // and bracketed colours, conditions and locale tags.
+        $tokens = preg_replace(['/"[^"]*"?|\\\\.|[_*].|\[[^\]]*\]?/s', '/AM\/PM|A\/P/i'], '', $formatCode) ?? '';
         $tokens = strtolower($tokens);
 
         $hasTime = strpbrk($tokens, 'hs') !== false;

@@ -71,9 +71,10 @@ final class SerialDate
         }
 
         // In the 1900 system serial 0 is the non-date "1900-01-00"; a value below one day is a
-        // time of day entered without a date, so only the time is meaningful.
+        // time of day entered without a date, so only the time is meaningful, and a date-only
+        // format has nothing to show.
         if (! $date1904 && $days === 0) {
-            return $time;
+            return $kind === CellFormats::DATE ? null : $time;
         }
 
         if (! $date1904 && $days === self::PHANTOM_LEAP_DAY) {

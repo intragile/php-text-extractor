@@ -93,6 +93,8 @@ final class XlsxDatesTest extends TestCase
 
         return [
             'iso date' => ['yyyy-mm-dd', $date],
+            'escaped quote before a time token' => ['\\"h', $time],
+            'escaped quote inside a number format' => ['0\\" "x d"', $serial],
             'upper case' => ['YYYY-MM-DD', $date],
             'hungarian with locale' => ['[$-40E]yyyy\. mmmm d\.;@', $date],
             'month alone is a date' => ['m', $date],
@@ -204,7 +206,8 @@ final class XlsxDatesTest extends TestCase
 
         $result = $this->extract(XlsxFixtures::xlsx(['S' => $rows], [], $styles));
 
-        $this->assertSame("## S\n10:30:00\t10:30:00\t10:30:00\t00:00:00", $result->text);
+        // A date-only format has no date to show for a serial below one day, so it stays a number.
+        $this->assertSame("## S\n0.4375\t10:30:00\t10:30:00\t00:00:00", $result->text);
     }
 
     public function test_only_plain_numbers_are_converted(): void
@@ -355,6 +358,18 @@ final class XlsxDatesTest extends TestCase
 
         $this->assertSame("## S\n2026-11-05\t2026-11-05T10:30:00\t10:30:00", $odsResult->text);
         $this->assertSame($odsResult->text, $this->extract($xlsx)->text);
+    }
+
+    public function test_conditional_format_number_formats_do_not_override_cell_formats(): void
+    {
+        $styles = str_replace('</styleSheet>', '<dxfs count="1"><dxf><numFmt numFmtId="164" formatCode="yyyy-mm-dd"/></dxf></dxfs></styleSheet>', XlsxFixtures::styles([0, 164], [164 => '0.00']));
+
+        $this->assertSame('45000', $this->cell('45000', $styles, 's="1"'));
+    }
+
+    public function test_a_cell_without_a_style_uses_the_first_cell_format(): void
+    {
+        $this->assertSame('2023-03-15', $this->cell('45000', XlsxFixtures::styles([14]), 't="n"'));
     }
 
     private function cell(string $value, string $styles, string $attributes): string

@@ -229,6 +229,7 @@ final class XlsxExtractor implements DeadlineAwareExtractor
         $formats = new CellFormats;
         $reader = $zip->xmlReader($part);
         $cellXfsDepth = null;
+        $numFmtsDepth = null;
 
         try {
             while ($reader->read()) {
@@ -240,13 +241,23 @@ final class XlsxExtractor implements DeadlineAwareExtractor
                     continue;
                 }
 
+                if ($type === XMLReader::END_ELEMENT && $reader->depth() === $numFmtsDepth) {
+                    $numFmtsDepth = null;
+
+                    continue;
+                }
+
                 if ($type !== XMLReader::ELEMENT) {
                     continue;
                 }
 
                 $name = $reader->localName();
 
-                if ($name === 'numFmt') {
+                if ($name === 'numFmts') {
+                    $numFmtsDepth = $reader->isEmptyElement() ? null : $reader->depth();
+                } elseif ($name === 'numFmt' && $numFmtsDepth !== null && $reader->depth() === $numFmtsDepth + 1) {
+                    // Conditional formats (dxfs) carry their own numFmt elements, which only apply
+                    // while a rule matches and must not replace the workbook's number formats.
                     if ($formats->customCount() >= self::MAX_CUSTOM_NUMBER_FORMATS) {
                         throw new ArchiveLimitExceeded(sprintf('The styles part defines more than %d number formats.', self::MAX_CUSTOM_NUMBER_FORMATS));
                     }
@@ -382,7 +393,8 @@ final class XlsxExtractor implements DeadlineAwareExtractor
                 };
             case null:
             case 'n':
-                $date = $style === null ? null : SerialDate::format((string) $value, $formats->kindOf($style), $date1904);
+                // A cell without a style attribute uses the first cell format.
+                $date = SerialDate::format((string) $value, $formats->kindOf($style ?? 0), $date1904);
 
                 return $date ?? self::flattenLineBreaks((string) $value);
             default:
