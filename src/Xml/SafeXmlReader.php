@@ -12,9 +12,14 @@ use XMLReader;
 /**
  * Forward-only XML reader hardened against hostile input.
  *
- * Network access, DTD loading and entity substitution are disabled, and any document with a
- * DOCTYPE is refused outright: none of the supported formats use one, and refusing it closes the
- * door on external-entity (XXE) and entity-expansion attacks regardless of the libxml version.
+ * Network access, DTD loading, default attributes and entity substitution are disabled, so an
+ * external DTD named by a DOCTYPE is never fetched. A DOCTYPE carrying an internal subset is
+ * refused outright: that is where entity declarations live, and refusing it closes the door on
+ * external-entity (XXE) and entity-expansion attacks regardless of the libxml version.
+ *
+ * Only fatal (well-formedness) errors reject a document. Recoverable ones such as an undeclared
+ * namespace prefix are ignored, and libxml's error list is drained after every step so that a
+ * document producing millions of them cannot exhaust memory.
  */
 final class SafeXmlReader
 {
@@ -54,6 +59,15 @@ final class SafeXmlReader
         return new self($reader, $previous, $limitExceeded);
     }
 
+    /**
+     * Opens a local file by path. The path is handed to libxml as an escaped file:// URI, so
+     * neither percent sequences nor stream-wrapper prefixes in the name are interpreted.
+     */
+    public static function fromFile(string $path): self
+    {
+        return self::fromUri(self::fileUri($path));
+    }
+
     public static function fromString(string $xml): self
     {
         self::requireExtension();
@@ -91,7 +105,22 @@ final class SafeXmlReader
      */
     public function next(): bool
     {
-        return $this->advance(@$this->reader->next());
+        // XMLReader::next() parses the whole subtree in a single call, during which libxml keeps
+        // every recoverable error it meets; walking the subtree step by step lets each step drain
+        // the error list. The reader ends up on the same node either way.
+        if ($this->closed || $this->nodeType() !== XMLReader::ELEMENT || $this->isEmptyElement()) {
+            return $this->read();
+        }
+
+        $depth = $this->depth();
+
+        while ($this->read()) {
+            if ($this->isEndTagAt($depth)) {
+                return $this->read();
+            }
+        }
+
+        return false;
     }
 
     public function nodeType(): int
@@ -148,13 +177,20 @@ final class SafeXmlReader
         $this->close();
     }
 
+    private function isEndTagAt(int $depth): bool
+    {
+        return $this->reader->nodeType === XMLReader::END_ELEMENT && $this->reader->depth === $depth;
+    }
+
     private function advance(bool $moved): bool
     {
-        if ($moved) {
-            if ($this->reader->nodeType === XMLReader::DOC_TYPE) {
+        $error = $this->drainErrors();
+
+        if ($moved && $error === null) {
+            if ($this->reader->nodeType === XMLReader::DOC_TYPE && $this->hasInternalSubset()) {
                 $this->close();
 
-                throw new MalformedXml('XML documents with a DOCTYPE declaration are not accepted.');
+                throw new MalformedXml('XML documents with an internal DTD subset are not accepted.');
             }
 
             $this->sawNode = true;
@@ -163,7 +199,6 @@ final class SafeXmlReader
         }
 
         $limitExceeded = $this->limitExceeded !== null && ($this->limitExceeded)();
-        $error = $this->firstError();
         $empty = ! $this->sawNode;
         $this->close();
 
@@ -182,15 +217,61 @@ final class SafeXmlReader
         return false;
     }
 
-    private function firstError(): ?string
+    /**
+     * Returns the first fatal error raised by the last step, then empties libxml's error list.
+     *
+     * The list only ever holds the errors of a single step, so reading it stays cheap; the last
+     * error check skips the copy entirely on the common error-free path.
+     */
+    private function drainErrors(): ?string
     {
+        if (libxml_get_last_error() === false) {
+            return null;
+        }
+
+        $fatal = null;
+
         foreach (libxml_get_errors() as $error) {
-            if ($error->level >= LIBXML_ERR_ERROR) {
-                return trim($error->message);
+            if ($error->level === LIBXML_ERR_FATAL) {
+                $fatal = trim($error->message);
+
+                break;
             }
         }
 
-        return null;
+        libxml_clear_errors();
+
+        return $fatal;
+    }
+
+    /**
+     * libxml serialises a DOCTYPE with its internal subset, so the subset shows up either as
+     * declarations ("[ ... ]>") or, for comments and processing instructions, as inner markup.
+     */
+    private function hasInternalSubset(): bool
+    {
+        $outer = rtrim(@$this->reader->readOuterXml());
+        $inner = @$this->reader->readInnerXml();
+        libxml_clear_errors();
+
+        return str_ends_with($outer, ']>') || $inner !== '';
+    }
+
+    private static function fileUri(string $path): string
+    {
+        $path = str_replace('\\', '/', $path);
+        $drive = '';
+
+        if (preg_match('#^[A-Za-z]:/#', $path) === 1) {
+            $drive = '/'.substr($path, 0, 2);
+            $path = substr($path, 2);
+        } elseif (! str_starts_with($path, '/')) {
+            $path = str_replace('\\', '/', (string) getcwd()).'/'.$path;
+        }
+
+        $segments = array_map('rawurlencode', explode('/', $path));
+
+        return 'file://'.$drive.implode('/', $segments);
     }
 
     private static function requireExtension(): void

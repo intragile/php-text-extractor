@@ -92,6 +92,185 @@ final class SafeXmlReaderTest extends TestCase
         $this->assertSame('a&b<c>', self::drainText(SafeXmlReader::fromString('<r>a&amp;b<![CDATA[<c>]]></r>')));
     }
 
+    public function test_undeclared_namespace_prefix_is_not_fatal(): void
+    {
+        $text = self::drainText(SafeXmlReader::fromString('<r xmlns:w="urn:w"><w:t>before</w:t><foo:bar>inside</foo:bar><w:t>after</w:t></r>'));
+
+        $this->assertSame('beforeinsideafter', $text);
+    }
+
+    public function test_fatal_error_after_recoverable_errors_is_still_detected(): void
+    {
+        $this->expectException(MalformedXml::class);
+
+        self::drainText(SafeXmlReader::fromString('<r>'.str_repeat('<foo:bar/>', 5000).'<x></r>'));
+    }
+
+    public function test_recoverable_errors_do_not_accumulate_in_memory(): void
+    {
+        $path = Fixtures::file('<r><t>hello</t>'.str_repeat('<foo:bar/>', 1_000_000).'</r>', 'xml');
+
+        $growth = self::peakGrowth(static function () use ($path): void {
+            self::assertSame('hello', self::drainText(SafeXmlReader::fromUri($path)));
+        });
+
+        $this->assertLessThan(16 * 1024 * 1024, $growth);
+    }
+
+    public function test_skipping_a_subtree_full_of_recoverable_errors_stays_bounded(): void
+    {
+        $path = Fixtures::file('<r><skip>'.str_repeat('<foo:bar/>', 1_000_000).'</skip><t>after</t></r>', 'xml');
+
+        $growth = self::peakGrowth(function () use ($path): void {
+            $reader = SafeXmlReader::fromUri($path);
+            $text = '';
+            $moved = $reader->read();
+
+            while ($moved) {
+                if ($reader->nodeType() === XMLReader::ELEMENT && $reader->localName() === 'skip') {
+                    $moved = $reader->next();
+
+                    continue;
+                }
+
+                if ($reader->nodeType() === XMLReader::TEXT) {
+                    $text .= $reader->value();
+                }
+
+                $moved = $reader->read();
+            }
+
+            $this->assertSame('after', $text);
+        });
+
+        $this->assertLessThan(16 * 1024 * 1024, $growth);
+    }
+
+    public function test_next_moves_past_the_subtree_like_xmlreader(): void
+    {
+        $reader = SafeXmlReader::fromString('<r><a><b>x</b><c/></a><d>y</d><e/></r>');
+        $seen = [];
+        $moved = $reader->read();
+
+        while ($moved) {
+            $seen[] = $reader->nodeType().':'.$reader->localName();
+            $moved = in_array($reader->localName(), ['a', 'e'], true) && $reader->nodeType() === XMLReader::ELEMENT
+                ? $reader->next()
+                : $reader->read();
+        }
+
+        $this->assertSame(['1:r', '1:a', '1:d', '3:#text', '15:d', '1:e', '15:r'], $seen);
+    }
+
+    public function test_doctype_without_internal_subset_is_accepted(): void
+    {
+        $xml = '<?xml version="1.0" encoding="UTF-8"?>'."\n"
+            .'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'."\n"
+            .'<plist version="1.0"><dict><key>Name</key><string>Győr</string></dict></plist>';
+
+        $this->assertSame('NameGyőr', self::drainText(SafeXmlReader::fromString($xml)));
+    }
+
+    public function test_external_dtd_is_never_loaded(): void
+    {
+        $dtd = Fixtures::file('<!ENTITY secret "TOP-SECRET-FROM-DTD"><!ATTLIST r leak CDATA "TOP-SECRET-ATTR">', 'dtd');
+        $xml = '<?xml version="1.0"?><!DOCTYPE r SYSTEM "file://'.$dtd.'"><r>a &secret; b</r>';
+        $reader = SafeXmlReader::fromString($xml);
+        $text = '';
+        $attribute = null;
+
+        while ($reader->read()) {
+            if ($reader->nodeType() === XMLReader::ELEMENT) {
+                $attribute ??= $reader->attribute('leak');
+            } elseif (in_array($reader->nodeType(), [XMLReader::TEXT, XMLReader::CDATA, XMLReader::ENTITY_REF], true)) {
+                $text .= $reader->value();
+            }
+        }
+
+        $this->assertStringNotContainsString('TOP-SECRET', $text);
+        $this->assertNull($attribute);
+    }
+
+    public function test_external_system_entity_in_internal_subset_is_refused(): void
+    {
+        $secret = Fixtures::file('root:x:0:0:secret', 'txt');
+        $path = Fixtures::file('<?xml version="1.0"?><!DOCTYPE r [<!ENTITY % ext SYSTEM "file://'.$secret.'"> %ext;]><r>x</r>', 'xml');
+        $text = '';
+
+        try {
+            $text = self::drainText(SafeXmlReader::fromUri($path));
+            $this->fail('A document with an internal subset must be refused.');
+        } catch (MalformedXml $exception) {
+            $this->assertStringNotContainsString('root:', $text.$exception->getMessage());
+        }
+    }
+
+    public function test_billion_laughs_internal_subset_is_refused_quickly(): void
+    {
+        $subset = '<!ENTITY lol0 "lol">';
+
+        for ($i = 1; $i <= 9; $i++) {
+            $subset .= '<!ENTITY lol'.$i.' "'.str_repeat('&lol'.($i - 1).';', 10).'">';
+        }
+
+        $path = Fixtures::file('<?xml version="1.0"?><!DOCTYPE lolz ['.$subset.']><lolz>&lol9;</lolz>', 'xml');
+        $started = microtime(true);
+
+        try {
+            self::drainText(SafeXmlReader::fromUri($path));
+            $this->fail('A document with an internal subset must be refused.');
+        } catch (MalformedXml) {
+            $this->assertLessThan(1.0, microtime(true) - $started);
+        }
+    }
+
+    public function test_empty_internal_subset_brackets_are_refused(): void
+    {
+        $this->expectException(MalformedXml::class);
+
+        self::drainText(SafeXmlReader::fromString('<!DOCTYPE r [<!-- nothing -->]><r>x</r>'));
+    }
+
+    public function test_from_file_does_not_unescape_percent_sequences(): void
+    {
+        $directory = sys_get_temp_dir().'/txx_pct_'.bin2hex(random_bytes(4));
+        mkdir($directory);
+
+        try {
+            file_put_contents($directory.'/reportA.xml', '<r>wrong file</r>');
+            file_put_contents($directory.'/report%41.xml', '<r>right file</r>');
+            file_put_contents($directory.'/100% #1 ?.xml', '<r>hundred</r>');
+
+            $this->assertSame('right file', self::drainText(SafeXmlReader::fromFile($directory.'/report%41.xml')));
+            $this->assertSame('hundred', self::drainText(SafeXmlReader::fromFile($directory.'/100% #1 ?.xml')));
+        } finally {
+            foreach ((array) glob($directory.'/*') as $file) {
+                @unlink((string) $file);
+            }
+
+            @rmdir($directory);
+        }
+    }
+
+    public function test_from_file_never_interprets_stream_wrappers(): void
+    {
+        $this->expectException(MalformedXml::class);
+
+        self::drainText(SafeXmlReader::fromFile('data://text/plain,<r>injected</r>'));
+    }
+
+    private static function peakGrowth(callable $work): int
+    {
+        if (function_exists('memory_reset_peak_usage')) {
+            memory_reset_peak_usage();
+        }
+
+        $before = memory_get_peak_usage();
+        $work();
+
+        return memory_get_peak_usage() - $before;
+    }
+
     public function test_internal_error_state_is_restored(): void
     {
         $before = libxml_use_internal_errors(false);
