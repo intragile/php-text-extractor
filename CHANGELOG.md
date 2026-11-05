@@ -27,8 +27,9 @@ All notable changes to this project are documented here. The format follows
   decoders for Windows-1250, 1253, 1255–1258, CP874 and CP437.
 - `maxParseSeconds`, a cooperative time limit for parsing done in PHP, reported as
   `Failed` / `parse_timeout`; external tools keep their own `processTimeout`.
-- XLSX cells with a date or time number format are written in ISO 8601 form, as ODS dates are;
-  both the 1900 and the 1904 date systems are supported.
+- XLSX cells with a date or time number format and ODS date and time cells are written in the
+  same ISO 8601 form, whatever their display format; XLSX supports both the 1900 and the 1904 date
+  systems.
 - The `Extractor` contract for custom extractors, registered with `withExtractor()`.
 
 ---
