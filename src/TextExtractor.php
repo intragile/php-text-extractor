@@ -8,7 +8,16 @@ use IntrAgile\TextExtractor\Archive\ArchiveLimitExceeded;
 use IntrAgile\TextExtractor\Contracts\Extractor;
 use IntrAgile\TextExtractor\Detection\FormatDetector;
 use IntrAgile\TextExtractor\Exception\CorruptInput;
+use IntrAgile\TextExtractor\Extractors\HtmlExtractor;
+use IntrAgile\TextExtractor\Extractors\ImageExtractor;
+use IntrAgile\TextExtractor\Extractors\Ooxml\DocxExtractor;
+use IntrAgile\TextExtractor\Extractors\Ooxml\PptxExtractor;
+use IntrAgile\TextExtractor\Extractors\Ooxml\XlsxExtractor;
+use IntrAgile\TextExtractor\Extractors\OpenDocumentExtractor;
+use IntrAgile\TextExtractor\Extractors\PdfExtractor;
 use IntrAgile\TextExtractor\Extractors\PlainTextExtractor;
+use IntrAgile\TextExtractor\Extractors\RtfExtractor;
+use IntrAgile\TextExtractor\Extractors\XmlExtractor;
 use IntrAgile\TextExtractor\Output\TextNormalizer;
 use IntrAgile\TextExtractor\Process\ProcessRunner;
 use IntrAgile\TextExtractor\Process\ToolLocator;
@@ -57,6 +66,15 @@ final class TextExtractor
 
         return [
             new PlainTextExtractor,
+            new XmlExtractor,
+            new HtmlExtractor,
+            new RtfExtractor,
+            new DocxExtractor,
+            new PptxExtractor,
+            new XlsxExtractor,
+            new OpenDocumentExtractor,
+            new PdfExtractor($runner, $locator),
+            new ImageExtractor($runner, $locator),
         ];
     }
 
