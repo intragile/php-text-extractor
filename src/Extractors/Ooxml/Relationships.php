@@ -17,36 +17,54 @@ final class Relationships
      */
     public static function parse(SafeZip $zip, string $relsPath): array
     {
+        $targets = [];
+
+        foreach (self::entries($zip, $relsPath) as $entry) {
+            $targets[$entry['id']] = $entry['target'];
+        }
+
+        return $targets;
+    }
+
+    /**
+     * Internal relationships in document order; external targets and unresolvable paths are skipped.
+     *
+     * @return list<array{id: string, type: string, target: string}>
+     */
+    public static function entries(SafeZip $zip, string $relsPath): array
+    {
         if (! $zip->has($relsPath)) {
             return [];
         }
 
         $base = self::sourceDirectory($relsPath);
         $reader = $zip->xmlReader($relsPath);
-        $targets = [];
+        $entries = [];
 
-        while ($reader->read()) {
-            if ($reader->nodeType() !== XMLReader::ELEMENT || $reader->localName() !== 'Relationship') {
-                continue;
+        try {
+            while ($reader->read()) {
+                if ($reader->nodeType() !== XMLReader::ELEMENT || $reader->localName() !== 'Relationship') {
+                    continue;
+                }
+
+                $id = $reader->attribute('Id');
+                $target = $reader->attribute('Target');
+
+                if ($id === null || $target === null || strcasecmp((string) $reader->attribute('TargetMode'), 'External') === 0) {
+                    continue;
+                }
+
+                $resolved = self::resolve($base, rawurldecode($target));
+
+                if ($resolved !== null) {
+                    $entries[] = ['id' => $id, 'type' => (string) $reader->attribute('Type'), 'target' => $resolved];
+                }
             }
-
-            $id = $reader->attribute('Id');
-            $target = $reader->attribute('Target');
-
-            if ($id === null || $target === null || strcasecmp((string) $reader->attribute('TargetMode'), 'External') === 0) {
-                continue;
-            }
-
-            $resolved = self::resolve($base, rawurldecode($target));
-
-            if ($resolved !== null) {
-                $targets[$id] = $resolved;
-            }
+        } finally {
+            $reader->close();
         }
 
-        $reader->close();
-
-        return $targets;
+        return $entries;
     }
 
     /**

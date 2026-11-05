@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace IntrAgile\TextExtractor\Extractors\Ooxml;
 
 use IntrAgile\TextExtractor\Archive\SafeZip;
-use XMLReader;
 
 /**
  * Finds OOXML parts by relationship type rather than by conventional file name.
@@ -35,42 +34,11 @@ final class PartLocator
      */
     public static function byType(SafeZip $zip, string $sourcePart, string $type): array
     {
-        $relsPath = self::relationshipsPath($sourcePart);
-
-        if (! $zip->has($relsPath)) {
-            return [];
-        }
-
-        $ids = [];
-        $reader = $zip->xmlReader($relsPath);
-
-        try {
-            while ($reader->read()) {
-                if ($reader->nodeType() !== XMLReader::ELEMENT || $reader->localName() !== 'Relationship') {
-                    continue;
-                }
-
-                $id = $reader->attribute('Id');
-                $relationshipType = (string) $reader->attribute('Type');
-
-                if ($id !== null && str_ends_with($relationshipType, '/'.$type)) {
-                    $ids[] = $id;
-                }
-            }
-        } finally {
-            $reader->close();
-        }
-
-        if ($ids === []) {
-            return [];
-        }
-
-        $targets = Relationships::parse($zip, $relsPath);
         $parts = [];
 
-        foreach ($ids as $id) {
-            if (isset($targets[$id]) && $zip->has($targets[$id])) {
-                $parts[] = $targets[$id];
+        foreach (Relationships::entries($zip, self::relationshipsPath($sourcePart)) as $entry) {
+            if (str_ends_with($entry['type'], '/'.$type) && $zip->has($entry['target'])) {
+                $parts[] = $entry['target'];
             }
         }
 
