@@ -132,7 +132,7 @@ dönti el azt is, melyik Office-formátum a zip-konténer.
 | Formátum | Kimenet |
 |---|---|
 | DOCX | törzs, táblázatok, szövegdobozok, láb- és végjegyzetek; a törölt változáskövetés és a mezőkódok kimaradnak |
-| XLSX | minden munkalap `## Munkalap neve` sorral, utána a nem üres sorok, a cellák tabulátorral (a cellán belüli sortörésből szóköz lesz); a képletek tárolt értéke; a dátumok sorszámként maradnak |
+| XLSX | minden munkalap `## Munkalap neve` sorral, utána a nem üres sorok, a cellák tabulátorral (a cellán belüli sortörésből szóköz lesz); a képletek tárolt értéke; a dátum- vagy időformátumú számok ISO 8601 alakban (`2026-11-05`, `2026-11-05T10:30:00`, `10:30:00`), ugyanúgy, mint az ODS-nél; az időtartamok (pl. `[h]:mm`) és a többi szám tárolt értékként |
 | PPTX | diák a bemutató sorrendjében, üres sorral elválasztva; az előadói jegyzetek kimaradnak |
 | ODT / ODS / ODP | mint a DOCX / XLSX / PPTX; a megjegyzések és a törölt változások kimaradnak |
 | RTF | szöveg bekezdésekkel; a betűtábla, a képek és az egyéb metaadatok kimaradnak |
