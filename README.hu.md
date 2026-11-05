@@ -100,6 +100,7 @@ kivételt.
 | `missing_extension` | Failed | nincs telepítve az `ext-zip`, `ext-xmlreader` vagy `ext-dom` |
 | `missing_tool` | Failed | nincs telepítve a `pdftotext` vagy a `tesseract` |
 | `tool_timeout` | Failed | az eszköz túllépte a timeoutot |
+| `parse_timeout` | Failed | a PHP-ban futó feldolgozás tovább tartott a `maxParseSeconds`-nál; a részleges szöveg elvész |
 | `tool_failed` | Failed | az eszköz összeomlott, kifutott a memóriából vagy hibát jelzett |
 | `internal_error` | Failed | egy extractor váratlan kivételt dobott (kérjük, jelezd) |
 | `unsupported_format` | NotExtractable | ismeretlen formátum, régi `.doc`/`.xls`/`.ppt`, titkosított Office-fájl |
@@ -167,6 +168,7 @@ $extractor = TextExtractor::create(new Options(
 | `maxHtmlBytes` | 10 MiB | a nagyobb HTML `too_large`; a libxml a DOM-ot natív memóriában, a `memory_limit`-en kívül építi fel: 10 MiB sűrű markup csúcsa kb. 400 MB RSS |
 | `maxImagePixels` | 16 000 000 | ha egy oldal vagy képkocka nagyobb, OCR előtt visszautasítja |
 | `processTimeout` | 60 s | külső eszközönként |
+| `maxParseSeconds` | 60 s | a PHP-ban futó feldolgozás (XML, OOXML, OpenDocument, RTF, szöveg, CSV, HTML) egy hívásra; felette az eredmény `Failed` / `parse_timeout` |
 | `processMemoryMb` | 512 | eszközönkénti címtér-plafon Linuxon; `0` kikapcsolja |
 | `pdftotextBinary` | `null` | útvonal vagy parancsnév; `null` esetén a `PATH`-ban keres |
 | `tesseractBinary` | `null` | útvonal vagy parancsnév; `null` esetén a `PATH`-ban keres |
@@ -224,10 +226,13 @@ A csomagot ismeretlen forrásból származó feltöltésekhez tervezték:
   shell csak a limitet állítja be; a kernel Linuxon érvényesíti. Windowson vagy
   `processMemoryMb: 0` mellett nincs shell. Minden futásnak van timeoutja, korlátos kimenete és saját,
   üres munkakönyvtára, amelyet utána töröl.
-- **CPU.** A limitek a memóriát és a kimenetet korlátozzák, a PHP-n belüli CPU-időt nem. Egy kis zipből
-  akár `maxArchiveTotalBytes` mennyiségű XML is feldolgozásra kerülhet, a libxml pedig négyzetes
-  időben ellenőrzi az ismétlődő attribútumokat. Ismeretlen fájlokat queue workerben, job-timeouttal
-  dolgozz fel.
+- **CPU.** A PHP-ban futó feldolgozás a `maxParseSeconds` után `parse_timeout`-tal leáll. A limitet a
+  parser a lépések között ellenőrzi (4096 XML-node, RTF-token vagy HTML-node, illetve 64 KiB szöveg
+  után), így a következő lépésnél lép érvénybe: egyetlen libxml-hívás nem szakítható meg. A libxml
+  egy olvasáson belül négyzetes időben ellenőrzi az ismétlődő attribútumokat, így egy 1 MB-os,
+  szándékosan összerakott nyitótag továbbra is több tíz másodpercig futhat, és a HTML DOM-má
+  alakítása is egyetlen hívás. Ismeretlen fájlokat queue workerben dolgozz fel, olyan job-timeouttal,
+  amely nagyobb a `maxParseSeconds`-nál és a `processTimeout`-nál.
 - **Átmeneti fájlok** a `sys_get_temp_dir()`-ben jönnek létre, és `finally` blokkban törlődnek.
 
 Sebezhetőség bejelentéséhez lásd: [SECURITY.md](SECURITY.md).

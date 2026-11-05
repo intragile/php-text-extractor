@@ -98,6 +98,7 @@ A missing extension or tool never throws: files of that format come back as
 | `missing_extension` | Failed | `ext-zip`, `ext-xmlreader` or `ext-dom` is not installed |
 | `missing_tool` | Failed | `pdftotext` or `tesseract` is not installed |
 | `tool_timeout` | Failed | the tool exceeded the timeout |
+| `parse_timeout` | Failed | parsing done in PHP ran longer than `maxParseSeconds`; partial text is discarded |
 | `tool_failed` | Failed | the tool crashed, ran out of memory or reported an error |
 | `internal_error` | Failed | an extractor threw unexpectedly (please report it) |
 | `unsupported_format` | NotExtractable | unknown format, legacy `.doc`/`.xls`/`.ppt`, encrypted Office file |
@@ -165,6 +166,7 @@ $extractor = TextExtractor::create(new Options(
 | `maxHtmlBytes` | 10 MiB | larger HTML is `too_large`; libxml builds the DOM in native memory, outside `memory_limit`: 10 MiB of dense markup peaks at about 400 MB RSS |
 | `maxImagePixels` | 16 000 000 | images with a larger page or frame are refused before OCR |
 | `processTimeout` | 60 s | per external tool run |
+| `maxParseSeconds` | 60 s | parsing done in PHP (XML, OOXML, OpenDocument, RTF, text, CSV, HTML) for one call; over it the result is `Failed` / `parse_timeout` |
 | `processMemoryMb` | 512 | address-space cap per tool on Linux; `0` disables it |
 | `pdftotextBinary` | `null` | path or command name; `null` searches the `PATH` |
 | `tesseractBinary` | `null` | path or command name; `null` searches the `PATH` |
@@ -222,10 +224,13 @@ The package is meant for untrusted uploads:
   single-quoted, so the shell only applies the limit; the kernel enforces it on Linux. On
   Windows, or with `processMemoryMb: 0`, no shell is involved. Each run has a timeout, bounded output and its
   own empty working directory, which is removed afterwards.
-- **CPU.** Limits bound memory and output, not CPU time spent inside PHP. Up to
-  `maxArchiveTotalBytes` of XML can be parsed from a small zip, and libxml checks duplicate
-  attributes in quadratic time. Run extraction of untrusted files in a queue worker with a job
-  timeout.
+- **CPU.** Parsing done in PHP stops at `maxParseSeconds` with `parse_timeout`. The limit is
+  checked between parser steps (every 4096 XML nodes, RTF tokens or HTML nodes, and every 64 KiB
+  of plain text), so it takes effect at the next step: a single libxml call cannot be
+  interrupted. libxml checks duplicate attributes in quadratic time within one read, so a crafted
+  1 MB start tag can still run for tens of seconds, and parsing an HTML document into a DOM is one
+  call. Run extraction of untrusted files in a queue worker with a job timeout above
+  `maxParseSeconds` and `processTimeout`.
 - **Temporary files** are created in `sys_get_temp_dir()` and deleted in `finally` blocks.
 
 See [SECURITY.md](SECURITY.md) to report a vulnerability.

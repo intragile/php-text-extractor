@@ -22,9 +22,13 @@ All notable changes to this project are documented here. The format follows
   DTD subsets and keeps libxml's error list from growing.
 - External tools run from argument arrays with quoted arguments, a timeout, bounded output, a
   per-process memory cap on Linux and a private empty working directory.
-- `Options` for size limits (including a separate HTML limit and a per-page image pixel limit),
-  timeouts, tool paths, OCR languages and the fallback text encoding, with built-in decoders for
-  Windows-1250, 1253, 1255–1258, CP874 and CP437.
+- `Options` for size limits (including a separate 10 MiB HTML limit and a per-page image pixel
+  limit), timeouts, tool paths, OCR languages and the fallback text encoding, with built-in
+  decoders for Windows-1250, 1253, 1255–1258, CP874 and CP437.
+- `maxParseSeconds`, a cooperative time limit for parsing done in PHP, reported as
+  `Failed` / `parse_timeout`; external tools keep their own `processTimeout`.
+- XLSX cells with a date or time number format are written in ISO 8601 form, as ODS dates are;
+  both the 1900 and the 1904 date systems are supported.
 - The `Extractor` contract for custom extractors, registered with `withExtractor()`.
 
 ---

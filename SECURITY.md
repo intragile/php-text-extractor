@@ -20,10 +20,12 @@ This package parses untrusted files. Reports are especially welcome for:
 Bugs in poppler or Tesseract themselves should be reported to those projects; the package limits
 their impact with a timeout and, on Linux, a per-process memory cap.
 
-Known limitation: the limits bound memory and output, not CPU time spent parsing inside PHP. A
-small zip can expand to `maxArchiveTotalBytes` of XML, and libxml checks duplicate attributes in
-quadratic time, so a crafted 1 MB start tag can take tens of seconds. Run extraction of untrusted
-files in a queue worker with a job timeout.
+Known limitation: parsing done in PHP is bounded by `maxParseSeconds`, but the limit is checked
+between parser steps and takes effect at the next step. A single libxml call cannot be
+interrupted: libxml checks duplicate attributes in quadratic time within one read, so a crafted
+1 MB start tag can take tens of seconds, and an HTML document is parsed into a DOM in one call.
+Run extraction of untrusted files in a queue worker with a job timeout above `maxParseSeconds` and
+`processTimeout`.
 
 ---
 
