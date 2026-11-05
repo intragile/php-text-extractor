@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.0.0] - 2026-11-06
 
 ### Added
 
@@ -33,6 +33,8 @@ All notable changes to this project are documented here. The format follows
   or serial number; for XLSX the number format decides which part is shown, and both the 1900 and
   the 1904 date systems are supported.
 - The `Extractor` contract for custom extractors, registered with `withExtractor()`.
+
+[1.0.0]: https://github.com/intragile/php-text-extractor/releases/tag/v1.0.0
 
 ---
 
