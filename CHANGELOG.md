@@ -18,11 +18,13 @@ All notable changes to this project are documented here. The format follows
 - Extractors for TXT, Markdown, CSV, TSV, JSON, XML, HTML, RTF, DOCX, PPTX, XLSX, ODT, ODS, ODP,
   PDF (`pdftotext`) and images (`tesseract`), with no Composer dependencies.
 - Streaming readers for the zip-based formats, with decompressed-byte budgets that hold even when
-  a file misstates its sizes, and an XML reader that refuses DOCTYPE declarations.
-- External tools run without a shell, with a timeout, bounded output, a per-process memory cap on
-  Linux and a private empty working directory.
-- `Options` for size limits, timeouts, tool paths, OCR languages and the fallback text encoding,
-  including a built-in Windows-1250 decoder.
+  a file misstates its sizes, and an XML reader that never loads external DTDs, refuses inline
+  DTD subsets and keeps libxml's error list from growing.
+- External tools run from argument arrays with quoted arguments, a timeout, bounded output, a
+  per-process memory cap on Linux and a private empty working directory.
+- `Options` for size limits (including a separate HTML limit and a per-page image pixel limit),
+  timeouts, tool paths, OCR languages and the fallback text encoding, with built-in decoders for
+  Windows-1250, 1253, 1255–1258, CP874 and CP437.
 - The `Extractor` contract for custom extractors, registered with `withExtractor()`.
 
 ---

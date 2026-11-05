@@ -29,15 +29,16 @@ if ($result->isSuccessful()) {
 
 - **No Composer dependencies.** DOCX, XLSX, PPTX, ODT, ODS and ODP are read with PHP's own
   `ZipArchive` and `XMLReader`; PDF and OCR use the standard `pdftotext` and `tesseract` tools.
-- **Bounded memory.** Office files are streamed, never loaded whole; output is capped; external
-  tools run with a timeout and, on Linux, a per-process memory cap, so one huge scan cannot take
-  your worker down.
+- **Bounded memory.** Office files are streamed from the zip and read node by node, never
+  loaded whole; spreadsheet strings and the output are capped; HTML, which needs a DOM, has its
+  own size limit; external tools run with a timeout and, on Linux, a per-process memory cap, so
+  one huge scan cannot take your worker down.
 - **A result that tells "no text" from "failed".** A photo without text is a success with empty
   text, not an error, and a timeout is never mistaken for an empty file. Batch jobs can retry
   exactly the files worth retrying.
 - **Safe on untrusted uploads.** Zip bombs are stopped on the bytes actually decompressed (not
-  the sizes the file claims), XML with a DOCTYPE is refused (no XXE), and tools are started
-  without a shell.
+  the sizes the file claims), external DTDs are never loaded and inline DTDs are refused (no
+  XXE), and file names never reach a shell unquoted.
 - **Content-based detection.** A PDF called `notes.txt` is read as a PDF.
 - **PHP 8.1+, framework-free.**
 
@@ -82,7 +83,7 @@ A missing extension or tool never throws: files of that format come back as
 | `format` | `?Format` | detected format, e.g. `Format::Docx` |
 | `reason` | `?Reason` | why it is not a plain success |
 | `message` | `?string` | human-readable detail for logs |
-| `truncated` | `bool` | the output limit was reached |
+| `truncated` | `bool` | the output limit was reached; a truncated result is always `Extracted` |
 
 | Status | Meaning | Retry? |
 |---|---|---|
@@ -100,10 +101,10 @@ A missing extension or tool never throws: files of that format come back as
 | `tool_failed` | Failed | the tool crashed, ran out of memory or reported an error |
 | `internal_error` | Failed | an extractor threw unexpectedly (please report it) |
 | `unsupported_format` | NotExtractable | unknown format, legacy `.doc`/`.xls`/`.ppt`, encrypted Office file |
-| `too_large` | NotExtractable | over `maxInputBytes` |
-| `image_too_large` | NotExtractable | over `maxImagePixels` (checked before OCR starts) |
+| `too_large` | NotExtractable | over `maxInputBytes`, or HTML over `maxHtmlBytes` |
+| `image_too_large` | NotExtractable | a page or frame over `maxImagePixels` (checked before OCR starts) |
 | `encrypted` | NotExtractable | password-protected PDF or OpenDocument file |
-| `corrupt` | NotExtractable | damaged or structurally invalid file |
+| `corrupt` | NotExtractable | damaged or structurally invalid file, e.g. an empty upload named `.pdf` |
 | `archive_limit_exceeded` | NotExtractable | a zip-bomb limit was hit |
 | `no_text_layer` | Empty | a PDF without a text layer, typically a scan |
 
@@ -118,23 +119,29 @@ $extractor->extractFromString($bytes, 'notes.txt');
 $extractor->extractFromStream($stream, 'report.pdf');    // read from the current position
 ```
 
-The file name only matters for text files, where it chooses between TXT, Markdown, CSV, TSV,
-JSON, XML and HTML. Binary formats are recognised by their content.
+Binary formats are recognised by their content, so a PDF called `notes.txt` is still a PDF. The
+file name chooses between TXT, Markdown, CSV, TSV, JSON, XML and HTML for text content, and it
+catches broken uploads: an empty or text-only file named `.pdf`, `.docx`, `.png` etc. is
+`NotExtractable/corrupt`, not an empty text file. Without `ext-zip` it also tells which Office
+format a zip container is meant to be.
 
 ## What you get per format
 
 | Format | Output |
 |---|---|
 | DOCX | body, tables, text boxes, footnotes and endnotes; deleted tracked changes and field codes are left out |
-| XLSX | every sheet as `## Sheet name`, then one line per non-empty row with cells separated by tabs; cached formula values; dates stay serial numbers |
+| XLSX | every sheet as `## Sheet name`, then one line per non-empty row with cells separated by tabs (line breaks inside a cell become spaces); cached formula values; dates stay serial numbers |
 | PPTX | slides in presentation order, separated by a blank line; speaker notes are left out |
 | ODT / ODS / ODP | as for DOCX / XLSX / PPTX; annotations and tracked deletions are left out |
 | RTF | text with paragraphs; font tables, pictures and other metadata are skipped |
-| HTML | visible text with block elements on separate lines; scripts and styles are dropped; `<title>` first |
+| HTML | visible text with block elements on separate lines; scripts and styles are dropped; the `<head>` title first |
 | XML | text and CDATA content |
 | CSV / TSV / TXT / MD / JSON | the text itself, decoded to UTF-8 |
 | PDF | `pdftotext` output, pages separated by a blank line |
-| Images | Tesseract OCR in the configured languages |
+| Images | Tesseract OCR in the configured languages; every page of a multi-page TIFF |
+
+Tables in DOCX, PPTX, ODT, ODP and HTML come out like spreadsheet rows: one row per line, cells
+separated by a tab, paragraphs inside a cell joined by a space.
 
 ## Options
 
@@ -155,13 +162,14 @@ $extractor = TextExtractor::create(new Options(
 | `maxArchiveEntryBytes` | 256 MiB | decompressed bytes allowed from one zip entry |
 | `maxArchiveTotalBytes` | 512 MiB | decompressed bytes allowed from one file |
 | `maxArchiveEntries` | 10 000 | entries allowed in one zip container |
-| `maxImagePixels` | 16 000 000 | larger images are refused before OCR |
+| `maxHtmlBytes` | 20 MiB | larger HTML is `too_large`; parsing it into a DOM costs many times its size |
+| `maxImagePixels` | 16 000 000 | images with a larger page or frame are refused before OCR |
 | `processTimeout` | 60 s | per external tool run |
 | `processMemoryMb` | 512 | address-space cap per tool on Linux; `0` disables it |
 | `pdftotextBinary` | `null` | path or command name; `null` searches the `PATH` |
 | `tesseractBinary` | `null` | path or command name; `null` searches the `PATH` |
 | `ocrLanguages` | `eng` | Tesseract languages joined with `+`; all must be installed |
-| `fallbackEncoding` | `Windows-1252` | for text files that are not valid UTF-8 |
+| `fallbackEncoding` | `Windows-1252` | for text files that are not valid UTF-8; any mbstring encoding, plus built-in Windows-1250, 1253, 1255–1258, CP874 and CP437 |
 
 `$options->with(['maxOutputBytes' => 1_000_000])` returns a modified copy.
 
@@ -193,7 +201,8 @@ $extractor = TextExtractor::create()->withExtractor(new CloudOcrExtractor($clien
 ```
 
 Return raw text; normalisation, the output cap and the empty-text check are applied for you.
-Exceptions thrown by an extractor become `Failed/internal_error`.
+Throw `IntrAgile\TextExtractor\Exception\CorruptInput` for a damaged file
+(`NotExtractable/corrupt`); any other exception becomes `Failed/internal_error`.
 
 ## Security
 
@@ -202,10 +211,21 @@ The package is meant for untrusted uploads:
 - **Zip bombs.** Every zip entry is read through a counting stream; decompression stops at
   `maxArchiveEntryBytes` / `maxArchiveTotalBytes` even when the file lies about its sizes.
   Entry names with `..` or absolute paths are never read.
-- **XML.** Network access, DTD loading and entity substitution are off, and any document with
-  a DOCTYPE is refused: no supported format uses one.
-- **External tools.** Commands are passed as argument arrays, never through a shell, with a
-  timeout, bounded output and a memory cap.
+- **XML.** Network access, DTD loading and entity substitution are off. A DOCTYPE that only
+  names an external DTD (as in an Apple plist) is accepted, because that DTD is never loaded; a
+  DOCTYPE with an inline subset, where entities could be declared, is refused as `corrupt`.
+  Paths are passed to libxml as escaped `file://` URIs, so `%41` or `php://` in a file name is
+  never interpreted.
+- **External tools.** Commands are built from argument arrays and the input path is always
+  absolute, so it can never be read as an option. While the memory cap is on (the default),
+  the tool is started through `/bin/sh -c 'ulimit -v …; exec …'` with every argument
+  single-quoted, so the shell only applies the limit; the kernel enforces it on Linux. On
+  Windows, or with `processMemoryMb: 0`, no shell is involved. Each run has a timeout, bounded output and its
+  own empty working directory, which is removed afterwards.
+- **CPU.** Limits bound memory and output, not CPU time spent inside PHP. Up to
+  `maxArchiveTotalBytes` of XML can be parsed from a small zip, and libxml checks duplicate
+  attributes in quadratic time. Run extraction of untrusted files in a queue worker with a job
+  timeout.
 - **Temporary files** are created in `sys_get_temp_dir()` and deleted in `finally` blocks.
 
 See [SECURITY.md](SECURITY.md) to report a vulnerability.
