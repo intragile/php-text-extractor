@@ -9,6 +9,7 @@ use IntrAgile\TextExtractor\Contracts\Extractor;
 use IntrAgile\TextExtractor\Exception\CorruptInput;
 use IntrAgile\TextExtractor\Format;
 use IntrAgile\TextExtractor\Options;
+use IntrAgile\TextExtractor\Output\LayoutWriter;
 use IntrAgile\TextExtractor\Output\TextBuffer;
 use IntrAgile\TextExtractor\Reason;
 use IntrAgile\TextExtractor\Result;
@@ -18,7 +19,8 @@ use XMLReader;
 /**
  * Streams the text of OpenDocument text documents, spreadsheets and presentations from content.xml.
  *
- * Spreadsheets are written one row per line with tab-separated cells. Empty cells and rows are
+ * Spreadsheets and the tables of text documents and presentations are written one row per line
+ * with tab-separated cells. Footnotes and endnotes are moved after the body text. Empty cells and rows are
  * never expanded from their repeat counts: a single row element may legally stand for millions of
  * blank rows, so only cells with content are repeated, and only up to a fixed cap.
  */
@@ -44,15 +46,30 @@ final class OpenDocumentExtractor implements Extractor
 
     /**
      * Subtrees whose text is not part of the visible document body: comments, deleted revisions,
-     * accessibility metadata, speaker notes, embedded binaries and style definitions.
+     * footnote and endnote marks, accessibility metadata, speaker notes, embedded binaries and
+     * style definitions.
      */
     private const SKIPPED = [
         self::NS_OFFICE => ['annotation', 'forms', 'automatic-styles', 'font-face-decls', 'scripts'],
-        self::NS_TEXT => ['tracked-changes', 'sequence-decls'],
+        self::NS_TEXT => ['tracked-changes', 'sequence-decls', 'note-citation'],
         self::NS_TABLE => ['covered-table-cell'],
         self::NS_DRAW => ['image'],
         self::NS_SVG => ['desc', 'title'],
         self::NS_PRESENTATION => ['notes'],
+    ];
+
+    /** Table elements of text documents and presentations => their start and end layout events. */
+    private const TABLE_EVENTS = [
+        'table' => ['table', 'table-end'],
+        'table-row' => ['row', 'row-end'],
+        'table-cell' => ['cell', 'cell-end'],
+    ];
+
+    /** What a layout event adds to the text of a spreadsheet cell, which is flattened later. */
+    private const CELL_EVENTS = [
+        'tab' => "\t",
+        'line' => "\n",
+        'paragraph' => "\n",
     ];
 
     /** office:value-type => the attribute holding the typed value */
@@ -92,10 +109,11 @@ final class OpenDocumentExtractor implements Extractor
             }
 
             $buffer = new TextBuffer($options->maxOutputBytes);
+            $notes = new TextBuffer($options->maxOutputBytes);
             $reader = $zip->xmlReader('content.xml');
 
             try {
-                $dropped = $this->walk($reader, $buffer, $options->maxOutputBytes);
+                $dropped = $this->walk($reader, $buffer, $notes, $options->maxOutputBytes);
             } finally {
                 $reader->close();
             }
@@ -103,7 +121,14 @@ final class OpenDocumentExtractor implements Extractor
             $zip->close();
         }
 
-        return Result::extracted($buffer->toString(), $format, $dropped || $buffer->isTruncated());
+        // Footnotes and endnotes follow the body, as they do for Word documents.
+        if ($notes->toString() !== '' && ! $buffer->isFull()) {
+            if ($buffer->toString() === '' || $buffer->append("\n")) {
+                $buffer->append($notes->toString());
+            }
+        }
+
+        return Result::extracted($buffer->toString(), $format, $dropped || $buffer->isTruncated() || $notes->isTruncated());
     }
 
     private function isEncrypted(SafeZip $zip): bool
@@ -132,7 +157,7 @@ final class OpenDocumentExtractor implements Extractor
     /**
      * @return bool whether spreadsheet content was dropped while buffering a cell or row
      */
-    private function walk(SafeXmlReader $reader, TextBuffer $buffer, int $maxBytes): bool
+    private function walk(SafeXmlReader $reader, TextBuffer $buffer, TextBuffer $notesBuffer, int $maxBytes): bool
     {
         $dropped = false;
         $paragraphs = 0;
@@ -142,6 +167,9 @@ final class OpenDocumentExtractor implements Extractor
         $tableName = '';
         $headerWritten = false;
         $anyTableWritten = false;
+        $body = new LayoutWriter($buffer);
+        $notes = new LayoutWriter($notesBuffer);
+        $openNotes = 0;
 
         /** @var list<string>|null $row non-empty cell values of the open row */
         $row = null;
@@ -160,7 +188,9 @@ final class OpenDocumentExtractor implements Extractor
             $type = $reader->nodeType();
             $namespace = $reader->namespaceUri();
             $name = $reader->localName();
+            // What the node contributes: text, or a layout event of the shared table convention.
             $chunk = '';
+            $event = null;
             $closes = false;
 
             if ($type === XMLReader::ELEMENT) {
@@ -184,16 +214,22 @@ final class OpenDocumentExtractor implements Extractor
                             $chunk = str_repeat(' ', self::count($reader->attribute('c', self::NS_TEXT), self::MAX_SPACES));
                             break;
                         case 'tab':
-                            $chunk = "\t";
+                            $event = 'tab';
                             break;
                         case 'line-break':
-                            $chunk = "\n";
+                            $event = 'line';
+                            break;
+                        case 'note':
+                            $openNotes += $closes ? 0 : 1;
+                            $closes = false;
                             break;
                     }
                 } elseif ($namespace === self::NS_OFFICE && $name === 'spreadsheet') {
                     $spreadsheet = true;
                 } elseif ($namespace === self::NS_DRAW && $name === 'page') {
-                    $chunk = $pages++ > 0 ? "\n" : '';
+                    $event = $pages++ > 0 ? 'paragraph' : null;
+                } elseif (! $spreadsheet && $namespace === self::NS_TABLE && isset(self::TABLE_EVENTS[$name])) {
+                    $event = self::TABLE_EVENTS[$name][0];
                 } elseif ($spreadsheet && $namespace === self::NS_TABLE && $name === 'table' && ($cell !== null || $nestedTables > 0)) {
                     $nestedTables += $closes ? 0 : 1;
                     $closes = false;
@@ -217,10 +253,23 @@ final class OpenDocumentExtractor implements Extractor
                 $chunk = (string) preg_replace('/[ \t\r\n]+/', ' ', $reader->value());
             }
 
+            $writer = $openNotes > 0 ? $notes : $body;
+
+            // The start event of an empty element has been taken; its end is handled below.
+            if ($event !== null && ! $this->send($writer, $event, $chunk, $cell, $openNotes, $maxBytes, $dropped)) {
+                return $dropped;
+            }
+
+            $event = null;
+
             if ($closes) {
                 if ($namespace === self::NS_TEXT && ($name === 'p' || $name === 'h')) {
                     $paragraphs = max(0, $paragraphs - 1);
-                    $chunk .= "\n";
+                    $event = 'paragraph';
+                } elseif ($namespace === self::NS_TEXT && $name === 'note' && $type === XMLReader::END_ELEMENT) {
+                    $openNotes = max(0, $openNotes - 1);
+                } elseif (! $spreadsheet && $namespace === self::NS_TABLE && isset(self::TABLE_EVENTS[$name])) {
+                    $event = self::TABLE_EVENTS[$name][1];
                 } elseif ($spreadsheet && $namespace === self::NS_TABLE) {
                     if ($nestedTables > 0) {
                         $nestedTables -= $name === 'table' ? 1 : 0;
@@ -262,22 +311,53 @@ final class OpenDocumentExtractor implements Extractor
                 }
             }
 
-            if ($chunk !== '') {
-                if ($cell !== null) {
-                    if (strlen($cell) < $maxBytes) {
-                        $cell .= $chunk;
-                    } else {
-                        $dropped = true;
-                    }
-                } elseif (! $buffer->append($chunk)) {
-                    return $dropped;
-                }
+            if (($event !== null || $chunk !== '') && ! $this->send($writer, $event ?? 'text', $chunk, $cell, $openNotes, $maxBytes, $dropped)) {
+                return $dropped;
             }
 
             $moved = $reader->read();
         }
 
         return $dropped;
+    }
+
+    /**
+     * Routes text or a layout event to the open spreadsheet cell, the notes or the body.
+     *
+     * A full notes buffer does not stop the walk: the body is still wanted, and the result is
+     * marked truncated afterwards.
+     *
+     * @return bool false once the body buffer is full
+     */
+    private function send(LayoutWriter $writer, string $event, string $chunk, ?string &$cell, int $openNotes, int $maxBytes, bool &$dropped): bool
+    {
+        if ($cell !== null && $openNotes === 0) {
+            $text = $event === 'text' ? $chunk : (self::CELL_EVENTS[$event] ?? '');
+
+            if (strlen($cell) < $maxBytes) {
+                $cell .= $text;
+            } elseif ($text !== '') {
+                $dropped = true;
+            }
+
+            return true;
+        }
+
+        $written = match ($event) {
+            'text' => $writer->text($chunk),
+            'tab' => $writer->tab(),
+            'line' => $writer->lineBreak(),
+            'paragraph' => $writer->paragraphEnd(),
+            'table' => $writer->tableStart(),
+            'table-end' => $writer->tableEnd(),
+            'row' => $writer->rowStart(),
+            'row-end' => $writer->rowEnd(),
+            'cell' => $writer->cellStart(),
+            'cell-end' => $writer->cellEnd(),
+            default => true,
+        };
+
+        return $written || $openNotes > 0;
     }
 
     /**
