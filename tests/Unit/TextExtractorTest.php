@@ -317,6 +317,16 @@ final class TextExtractorTest extends TestCase
         $this->assertSame($format, $result->format);
     }
 
+    public function test_truncated_office_file_is_corrupt(): void
+    {
+        $zip = (string) file_get_contents(Fixtures::zip(['[Content_Types].xml' => '<Types/>', 'word/document.xml' => str_repeat('<w:p/>', 500)], 'zip'));
+        $result = TextExtractor::create()->extractFromString(substr($zip, 0, intdiv(strlen($zip), 2)), 'report.docx');
+
+        $this->assertSame(Status::NotExtractable, $result->status);
+        $this->assertSame(Reason::Corrupt, $result->reason);
+        $this->assertSame(Format::Docx, $result->format);
+    }
+
     public function test_misnamed_binary_content_still_wins_over_the_extension(): void
     {
         $result = TextExtractor::create()->extractFromString('{\\rtf1 hello}', 'report.docx');

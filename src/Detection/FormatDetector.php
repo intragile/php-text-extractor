@@ -17,6 +17,8 @@ final class FormatDetector
 {
     private const SNIFF_BYTES = 8192;
 
+    private const PDF_HEADER_WINDOW = 1024;
+
     private const OPENDOCUMENT = [
         'application/vnd.oasis.opendocument.text' => Format::Odt,
         'application/vnd.oasis.opendocument.spreadsheet' => Format::Ods,
@@ -137,7 +139,7 @@ final class FormatDetector
     private function detectSignature(string $head): ?Format
     {
         return match (true) {
-            str_starts_with($head, '%PDF-') => Format::Pdf,
+            str_starts_with($head, '%PDF-'), $this->hasLatePdfHeader($head) => Format::Pdf,
             str_starts_with($head, "\x89PNG\r\n\x1a\n") => Format::Png,
             str_starts_with($head, "\xFF\xD8\xFF") => Format::Jpeg,
             str_starts_with($head, "II*\0"), str_starts_with($head, "MM\0*") => Format::Tiff,
@@ -147,6 +149,23 @@ final class FormatDetector
             str_starts_with($head, 'BM') && strlen($head) >= 14 && $this->isBmpHeader($head) => Format::Bmp,
             default => null,
         };
+    }
+
+    /**
+     * PDF readers accept the header anywhere in the first kilobyte, and some generators prefix it
+     * with stray bytes. Only a binary prefix counts, so a text file that mentions "%PDF-" stays text.
+     */
+    private function hasLatePdfHeader(string $head): bool
+    {
+        $offset = strpos(substr($head, 0, self::PDF_HEADER_WINDOW), '%PDF-');
+
+        if ($offset === false || $offset === 0) {
+            return false;
+        }
+
+        $prefix = substr($head, 0, $offset);
+
+        return str_contains($prefix, "\0") || ! mb_check_encoding($prefix, 'UTF-8');
     }
 
     /**
@@ -167,8 +186,10 @@ final class FormatDetector
 
         $zip = new ZipArchive;
 
+        // A damaged or truncated zip under an Office name is a broken upload: the extractor then
+        // reports it as corrupt instead of as an unknown format.
         if ($zip->open($path, ZipArchive::RDONLY) !== true) {
-            return null;
+            return self::CONTAINER_EXTENSIONS[$extension] ?? null;
         }
 
         try {

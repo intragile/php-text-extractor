@@ -40,6 +40,28 @@ final class FormatDetectorTest extends TestCase
         $this->assertSame(Format::Pdf, (new FormatDetector)->detect(Fixtures::file("%PDF-1.4\n", 'txt')));
     }
 
+    public function test_pdf_header_after_leading_binary_bytes_is_detected(): void
+    {
+        // PDF readers look for the header anywhere in the first kilobyte.
+        $this->assertSame(Format::Pdf, (new FormatDetector)->detect(Fixtures::file("\x0A\x90\xF1\x02%PDF-1.5\n%\xBF\xF7\xA2\xFE\n", 'pdf')));
+        $this->assertSame(Format::Pdf, (new FormatDetector)->detect(Fixtures::file(str_repeat("\0", 1000).'%PDF-1.4', 'bin')));
+    }
+
+    public function test_pdf_header_inside_text_does_not_make_a_pdf(): void
+    {
+        $this->assertSame(Format::Txt, (new FormatDetector)->detect(Fixtures::file("A file starts with %PDF-1.7\n", 'txt')));
+        $this->assertNull((new FormatDetector)->detect(Fixtures::file(str_repeat("\0", 1100).'%PDF-1.4', 'bin')));
+    }
+
+    public function test_unreadable_zip_takes_the_container_type_from_the_extension(): void
+    {
+        $zip = (string) file_get_contents(Fixtures::zip(['[Content_Types].xml' => '<Types/>', 'xl/workbook.xml' => str_repeat('<workbook/>', 500)], 'zip'));
+        $truncated = substr($zip, 0, intdiv(strlen($zip), 2));
+
+        $this->assertSame(Format::Xlsx, (new FormatDetector)->detect(Fixtures::file($truncated, 'xlsx')));
+        $this->assertNull((new FormatDetector)->detect(Fixtures::file($truncated, 'zip')));
+    }
+
     public function test_riff_that_is_not_webp_is_unknown(): void
     {
         $this->assertNull((new FormatDetector)->detect(Fixtures::file("RIFF\x24\0\0\0WAVEfmt ", 'webp')));
