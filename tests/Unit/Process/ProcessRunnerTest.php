@@ -129,6 +129,13 @@ final class ProcessRunnerTest extends TestCase
         $this->assertDirectoryDoesNotExist($directory);
     }
 
+    public function test_extra_environment_variables_reach_the_tool_alongside_the_inherited_ones(): void
+    {
+        $result = (new ProcessRunner)->run($this->php('echo getenv("TXX_PROBE"), "|", getenv("PATH") === false ? "no-path" : "path";'), 10, 0, 4096, ['TXX_PROBE' => 'on']);
+
+        $this->assertSame('on|path', $result->stdout);
+    }
+
     public function test_missing_binary_is_a_failure_not_an_exception(): void
     {
         $result = (new ProcessRunner)->run(['/nonexistent/tool', 'x'], 5, 0, 1024);

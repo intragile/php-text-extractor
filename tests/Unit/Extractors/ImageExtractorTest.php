@@ -164,6 +164,14 @@ final class ImageExtractorTest extends TestCase
         $this->assertTrue($result->truncated);
     }
 
+    public function test_tesseract_runs_single_threaded_so_thread_stacks_fit_the_memory_cap(): void
+    {
+        $fake = $this->fakeTesseract('echo "threads=$OMP_THREAD_LIMIT"');
+        $result = $this->orchestrator(new Options(tesseractBinary: $fake))->extract(Fixtures::committed('image/text.png'));
+
+        $this->assertSame('threads=1', $result->text);
+    }
+
     private function extractor(): ImageExtractor
     {
         return new ImageExtractor(new ProcessRunner, new ToolLocator);

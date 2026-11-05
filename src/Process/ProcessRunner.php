@@ -29,8 +29,9 @@ final class ProcessRunner
     /**
      * @param  list<string>  $command  The executable followed by its arguments.
      * @param  int  $memoryMb  Address-space cap in MiB; 0 disables it.
+     * @param  array<string, string>  $environment  Variables added to the inherited environment.
      */
-    public function run(array $command, int $timeoutSeconds, int $memoryMb, int $maxStdoutBytes): ProcessResult
+    public function run(array $command, int $timeoutSeconds, int $memoryMb, int $maxStdoutBytes, array $environment = []): ProcessResult
     {
         $directory = $this->createWorkingDirectory();
 
@@ -39,7 +40,7 @@ final class ProcessRunner
         }
 
         try {
-            return $this->runIn($directory, $command, $timeoutSeconds, $memoryMb, $maxStdoutBytes);
+            return $this->runIn($directory, $command, $timeoutSeconds, $memoryMb, $maxStdoutBytes, $environment);
         } finally {
             $this->removeWorkingDirectory($directory);
         }
@@ -47,8 +48,9 @@ final class ProcessRunner
 
     /**
      * @param  list<string>  $command
+     * @param  array<string, string>  $environment
      */
-    private function runIn(string $directory, array $command, int $timeoutSeconds, int $memoryMb, int $maxStdoutBytes): ProcessResult
+    private function runIn(string $directory, array $command, int $timeoutSeconds, int $memoryMb, int $maxStdoutBytes, array $environment): ProcessResult
     {
         $pipes = [];
         $process = @proc_open(
@@ -56,6 +58,7 @@ final class ProcessRunner
             [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
             $pipes,
             $directory,
+            $environment === [] ? null : array_merge(getenv(), $environment),
         );
 
         if (! is_resource($process)) {

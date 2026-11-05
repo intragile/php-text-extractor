@@ -73,6 +73,9 @@ final class ImageExtractor implements Extractor
             $options->processTimeout,
             $options->processMemoryMb,
             $stdoutLimit,
+            // OpenMP reserves address space for one thread stack per core, so on a large host a
+            // multi-threaded run can exceed the memory cap before reading a single pixel.
+            ['OMP_THREAD_LIMIT' => '1'],
         );
 
         $stderr = $this->withoutBenignDiagnostics($process->stderr);
