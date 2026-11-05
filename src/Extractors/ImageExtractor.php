@@ -45,17 +45,12 @@ final class ImageExtractor implements Extractor
     public function extract(string $path, Format $format, Options $options): Result
     {
         // Tesseract's memory use follows the pixel count, not the file size: a few hundred KB of
-        // JPEG can decode to hundreds of MB. getimagesize() reads only the header, so the check is
-        // cheap; when the header cannot be parsed, Tesseract itself reports the problem.
-        $size = @getimagesize($path);
+        // JPEG can decode to hundreds of MB. Only headers are read, so the check is cheap; when
+        // they cannot be parsed, Tesseract itself reports the problem.
+        $tooLarge = ImageGeometry::oversized($path, $options->maxImagePixels);
 
-        if (is_array($size) && $options->maxImagePixels < $size[0] * $size[1]) {
-            return Result::notExtractable(Reason::ImageTooLarge, $format, sprintf(
-                'The image has %d x %d pixels, above the limit of %d.',
-                $size[0],
-                $size[1],
-                $options->maxImagePixels,
-            ));
+        if ($tooLarge !== null) {
+            return Result::notExtractable(Reason::ImageTooLarge, $format, $tooLarge);
         }
 
         $binary = $this->locator->find('tesseract', $options->tesseractBinary);

@@ -14,6 +14,7 @@ use IntrAgile\TextExtractor\Status;
 use IntrAgile\TextExtractor\Tests\Support\Fixtures;
 use IntrAgile\TextExtractor\Tests\Support\TestCase;
 use IntrAgile\TextExtractor\TextExtractor;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 final class ImageExtractorTest extends TestCase
 {
@@ -72,6 +73,103 @@ final class ImageExtractorTest extends TestCase
         );
 
         $this->assertFileExists($flag);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function multiPageImages(): iterable
+    {
+        yield 'little-endian TIFF' => ['image/two-pages-le.tif'];
+        yield 'big-endian TIFF' => ['image/two-pages-be.tif'];
+        yield 'GIF frame larger than the logical screen' => ['image/two-frames.gif'];
+    }
+
+    #[DataProvider('multiPageImages')]
+    public function test_any_oversized_page_or_frame_is_refused(string $fixture): void
+    {
+        $flag = Fixtures::path('flag');
+        $binary = $this->fakeTesseract('touch '.escapeshellarg($flag));
+
+        // The first page has 200 pixels, the second 20 000.
+        $result = $this->orchestrator(new Options(maxImagePixels: 1000, tesseractBinary: $binary))
+            ->extract(Fixtures::committed($fixture));
+
+        $this->assertSame(Status::NotExtractable, $result->status);
+        $this->assertSame(Reason::ImageTooLarge, $result->reason);
+        $this->assertStringContainsString('200 x 100', (string) $result->message);
+        $this->assertFileDoesNotExist($flag);
+
+        $this->assertSame(Status::Empty, $this->orchestrator(new Options(maxImagePixels: 20000, tesseractBinary: $binary))
+            ->extract(Fixtures::committed($fixture))->status);
+        $this->assertFileExists($flag);
+    }
+
+    /**
+     * @return iterable<string, array{string, int}>
+     */
+    public static function synthesizedTiffs(): iterable
+    {
+        $small = [[10, 10], [10, 10]];
+        $large = [[10, 10], [10, 10], [4000, 1000]];
+
+        yield 'little-endian, large third page' => [self::tiff('II', $large), 1];
+        yield 'big-endian, large third page' => [self::tiff('MM', $large), 1];
+        yield 'BigTIFF, large third page' => [self::tiff('II', $large, bigTiff: true), 1];
+        yield 'big-endian BigTIFF, large third page' => [self::tiff('MM', $large, bigTiff: true), 1];
+        yield 'tags out of order' => [self::tiff('II', $large, unsorted: true), 1];
+        yield 'small pages' => [self::tiff('MM', $small), 0];
+        yield 'directory chain that loops back' => [self::tiff('II', $small, loop: true), 0];
+        yield 'directory offset past the end of the file' => [substr(self::tiff('II', $large), 0, 40), 0];
+        yield 'directory offset inside the header' => ["II\x2A\x00\x02\x00\x00\x00", 0];
+        yield 'too many pages to verify' => [self::tiff('II', array_fill(0, 10001, [1, 1])), 1];
+    }
+
+    #[DataProvider('synthesizedTiffs')]
+    public function test_every_tiff_directory_is_checked(string $bytes, int $refused): void
+    {
+        $flag = Fixtures::path('flag');
+        $binary = $this->fakeTesseract('touch '.escapeshellarg($flag));
+
+        $result = $this->extractor()->extract(Fixtures::file($bytes, 'tif'), Format::Tiff, new Options(maxImagePixels: 100, tesseractBinary: $binary));
+
+        if ($refused === 1) {
+            $this->assertSame(Status::NotExtractable, $result->status);
+            $this->assertSame(Reason::ImageTooLarge, $result->reason);
+            $this->assertFileDoesNotExist($flag);
+        } else {
+            $this->assertNotSame(Reason::ImageTooLarge, $result->reason);
+            $this->assertFileExists($flag);
+        }
+    }
+
+    /**
+     * @return iterable<string, array{string, int}>
+     */
+    public static function synthesizedGifs(): iterable
+    {
+        yield 'large second frame' => [self::gif(10, 10, [[10, 10], [500, 500]]), 1];
+        yield 'large logical screen' => [self::gif(500, 500, [[10, 10]]), 1];
+        yield 'small frames' => [self::gif(10, 10, [[10, 10], [5, 5]]), 0];
+        yield 'truncated before the second frame' => [substr(self::gif(10, 10, [[10, 10], [500, 500]]), 0, 40), 0];
+        yield 'not followed by any block' => ["GIF89a\x0A\x00\x0A\x00\x00\x00\x00", 0];
+    }
+
+    #[DataProvider('synthesizedGifs')]
+    public function test_every_gif_frame_is_checked(string $bytes, int $refused): void
+    {
+        $flag = Fixtures::path('flag');
+        $binary = $this->fakeTesseract('touch '.escapeshellarg($flag));
+
+        $result = $this->extractor()->extract(Fixtures::file($bytes, 'gif'), Format::Gif, new Options(maxImagePixels: 100, tesseractBinary: $binary));
+
+        if ($refused === 1) {
+            $this->assertSame(Reason::ImageTooLarge, $result->reason);
+            $this->assertFileDoesNotExist($flag);
+        } else {
+            $this->assertNotSame(Reason::ImageTooLarge, $result->reason);
+            $this->assertFileExists($flag);
+        }
     }
 
     public function test_missing_language_pack_is_failed_tool_failed(): void
@@ -187,6 +285,68 @@ final class ImageExtractorTest extends TestCase
         if ((new ToolLocator)->find('tesseract') === null) {
             $this->markTestSkipped('tesseract is not installed.');
         }
+    }
+
+    /**
+     * Builds the header and directory chain of a TIFF; pixel data is irrelevant to the size check.
+     *
+     * @param  list<array{int, int}>  $pages  width and height of each page
+     */
+    private static function tiff(string $order, array $pages, bool $bigTiff = false, bool $unsorted = false, bool $loop = false): string
+    {
+        $big = $order === 'MM';
+        $u16 = static fn (int $v): string => pack($big ? 'n' : 'v', $v);
+        $u32 = static fn (int $v): string => pack($big ? 'N' : 'V', $v);
+        $u64 = static fn (int $v): string => $big ? pack('J', $v) : pack('P', $v);
+        $offset = $bigTiff ? 16 : 8;
+        $header = $order.($bigTiff ? $u16(43).$u16(8).$u16(0).$u64($offset) : $u16(42).$u32($offset));
+        $entrySize = $bigTiff ? 20 : 12;
+        $ifdSize = ($bigTiff ? 8 : 2) + 3 * $entrySize + ($bigTiff ? 8 : 4);
+        $body = '';
+
+        foreach ($pages as $index => [$width, $height]) {
+            $entries = [
+                [256, 4, $width],
+                [257, 3, $height],
+                [258, 3, 8],
+            ];
+
+            if ($unsorted) {
+                $entries = [$entries[2], $entries[1], $entries[0]];
+            }
+
+            $next = $index === count($pages) - 1 ? ($loop ? $offset : 0) : $offset + ($index + 1) * $ifdSize;
+            $body .= $bigTiff ? $u64(count($entries)) : $u16(count($entries));
+
+            foreach ($entries as [$tag, $type, $value]) {
+                $field = $type === 3 ? $u16($value).($bigTiff ? str_repeat("\0", 6) : "\0\0") : ($bigTiff ? $u32($value)."\0\0\0\0" : $u32($value));
+                $body .= $u16($tag).$u16($type).($bigTiff ? $u64(1) : $u32(1)).$field;
+            }
+
+            $body .= $bigTiff ? $u64($next) : $u32($next);
+        }
+
+        return $header.$body;
+    }
+
+    /**
+     * Builds a GIF with the given logical screen and frames, each holding a few bytes of image data.
+     *
+     * @param  list<array{int, int}>  $frames
+     */
+    private static function gif(int $width, int $height, array $frames): string
+    {
+        // Global colour table of two entries, then a looping extension before the frames.
+        $gif = 'GIF89a'.pack('vv', $width, $height)."\x80\x00\x00".str_repeat("\x00\xFF", 3)
+            ."\x21\xFF\x0BNETSCAPE2.0\x03\x01\x00\x00\x00";
+
+        foreach ($frames as [$frameWidth, $frameHeight]) {
+            $gif .= "\x21\xF9\x04\x00\x00\x00\x00\x00"
+                ."\x2C".pack('vvvv', 0, 0, $frameWidth, $frameHeight)."\x00"
+                ."\x02\x02\x4C\x01\x00";
+        }
+
+        return $gif."\x3B";
     }
 
     private function fakeTesseract(string $body): string
