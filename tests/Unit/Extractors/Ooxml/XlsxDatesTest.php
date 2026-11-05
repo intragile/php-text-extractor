@@ -309,7 +309,7 @@ final class XlsxDatesTest extends TestCase
         $path = XlsxFixtures::xlsx(['S' => '<row><c s="0"><v>1</v></c></row>'], [], $styles);
         unset($styles);
 
-        $growth = self::peakGrowthOf(function () use ($path, &$result): void {
+        $growth = self::peakGrowth(function () use ($path, &$result): void {
             $result = $this->extract($path, new Options(maxOutputBytes: 1000));
         });
 
@@ -363,18 +363,6 @@ final class XlsxDatesTest extends TestCase
         $this->assertSame(Status::Extracted, $result->status);
 
         return substr($result->text, strlen("## S\n"));
-    }
-
-    private static function peakGrowthOf(callable $work): int
-    {
-        if (function_exists('memory_reset_peak_usage')) {
-            memory_reset_peak_usage();
-        }
-
-        $before = memory_get_peak_usage();
-        $work();
-
-        return memory_get_peak_usage() - $before;
     }
 
     private function extract(string $path, ?Options $options = null): Result
