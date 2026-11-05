@@ -19,7 +19,6 @@ final class OptionsTest extends TestCase
         $this->assertSame(10485760, $options->maxOutputBytes);
         $this->assertSame(268435456, $options->maxArchiveEntryBytes);
         $this->assertSame(536870912, $options->maxArchiveTotalBytes);
-        $this->assertSame(200, $options->maxCompressionRatio);
         $this->assertSame(10000, $options->maxArchiveEntries);
         $this->assertSame(16000000, $options->maxImagePixels);
         $this->assertSame(60, $options->processTimeout);
@@ -35,7 +34,7 @@ final class OptionsTest extends TestCase
      */
     public static function positiveLimits(): iterable
     {
-        foreach (['maxInputBytes', 'maxOutputBytes', 'maxArchiveEntryBytes', 'maxArchiveTotalBytes', 'maxCompressionRatio', 'maxArchiveEntries', 'maxImagePixels', 'processTimeout'] as $name) {
+        foreach (['maxInputBytes', 'maxOutputBytes', 'maxArchiveEntryBytes', 'maxArchiveTotalBytes', 'maxArchiveEntries', 'maxImagePixels', 'processTimeout'] as $name) {
             yield $name => [$name];
         }
     }

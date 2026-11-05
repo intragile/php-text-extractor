@@ -20,7 +20,6 @@ final class Options
         'maxOutputBytes',
         'maxArchiveEntryBytes',
         'maxArchiveTotalBytes',
-        'maxCompressionRatio',
         'maxArchiveEntries',
         'maxImagePixels',
         'processTimeout',
@@ -36,7 +35,6 @@ final class Options
         public readonly int $maxOutputBytes = 10485760,
         public readonly int $maxArchiveEntryBytes = 268435456,
         public readonly int $maxArchiveTotalBytes = 536870912,
-        public readonly int $maxCompressionRatio = 200,
         public readonly int $maxArchiveEntries = 10000,
         public readonly int $maxImagePixels = 16000000,
         public readonly int $processTimeout = 60,
@@ -80,7 +78,7 @@ final class Options
             }
         }
 
-        /** @var array{maxInputBytes: int, maxOutputBytes: int, maxArchiveEntryBytes: int, maxArchiveTotalBytes: int, maxCompressionRatio: int, maxArchiveEntries: int, maxImagePixels: int, processTimeout: int, processMemoryMb: int, pdftotextBinary: ?string, tesseractBinary: ?string, ocrLanguages: string, fallbackEncoding: string} $merged */
+        /** @var array{maxInputBytes: int, maxOutputBytes: int, maxArchiveEntryBytes: int, maxArchiveTotalBytes: int, maxArchiveEntries: int, maxImagePixels: int, processTimeout: int, processMemoryMb: int, pdftotextBinary: ?string, tesseractBinary: ?string, ocrLanguages: string, fallbackEncoding: string} $merged */
         $merged = array_merge($current, $overrides);
 
         return new self(...$merged);

@@ -45,6 +45,28 @@ final class Fixtures
     }
 
     /**
+     * A zip whose headers understate the real size of one entry, as a zip bomb would.
+     */
+    public static function zipWithFalseSize(string $name, string $contents, int $declaredSize): string
+    {
+        $path = self::zip([$name => $contents]);
+        $bytes = (string) file_get_contents($path);
+
+        $central = strpos($bytes, "PK\x01\x02");
+        $local = strpos($bytes, "PK\x03\x04");
+
+        if ($central === false || $local === false) {
+            throw new RuntimeException('Unexpected zip layout.');
+        }
+
+        $bytes = substr_replace($bytes, pack('V', $declaredSize), $central + 24, 4);
+        $bytes = substr_replace($bytes, pack('V', $declaredSize), $local + 22, 4);
+        file_put_contents($path, $bytes);
+
+        return $path;
+    }
+
+    /**
      * Path of a committed fixture under tests/fixtures.
      */
     public static function committed(string $relative): string
