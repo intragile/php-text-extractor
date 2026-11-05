@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace IntrAgile\TextExtractor;
 
+use Closure;
 use IntrAgile\TextExtractor\Archive\ArchiveLimitExceeded;
 use IntrAgile\TextExtractor\Contracts\Extractor;
 use IntrAgile\TextExtractor\Detection\FormatDetector;
@@ -21,6 +22,9 @@ use IntrAgile\TextExtractor\Extractors\XmlExtractor;
 use IntrAgile\TextExtractor\Output\TextNormalizer;
 use IntrAgile\TextExtractor\Process\ProcessRunner;
 use IntrAgile\TextExtractor\Process\ToolLocator;
+use IntrAgile\TextExtractor\Support\Deadline;
+use IntrAgile\TextExtractor\Support\DeadlineAwareExtractor;
+use IntrAgile\TextExtractor\Support\ParseTimedOut;
 use InvalidArgumentException;
 use Throwable;
 
@@ -40,6 +44,9 @@ final class TextExtractor
 
     /** @var list<Extractor> */
     private array $extractors;
+
+    /** @var (Closure(): int)|null */
+    private ?Closure $clock = null;
 
     /**
      * @param  list<Extractor>|null  $extractors  Tried in order; null selects the built-in set.
@@ -97,6 +104,21 @@ final class TextExtractor
         return $copy;
     }
 
+    /**
+     * Returns a copy that measures the parse time limit with the given clock.
+     *
+     * @internal Exists so that tests can exercise maxParseSeconds without waiting.
+     *
+     * @param  Closure(): int  $clock  Monotonic nanoseconds.
+     */
+    public function withClock(Closure $clock): self
+    {
+        $copy = clone $this;
+        $copy->clock = $clock;
+
+        return $copy;
+    }
+
     public function options(): Options
     {
         return $this->options;
@@ -107,6 +129,8 @@ final class TextExtractor
      */
     public function extract(string $path, ?string $filenameHint = null): Result
     {
+        $deadline = Deadline::fromOptions($this->options, $this->clock);
+
         if (! is_file($path) || ! is_readable($path)) {
             return Result::failed(Reason::Unreadable, null, 'The file does not exist or cannot be read.');
         }
@@ -142,7 +166,7 @@ final class TextExtractor
 
         foreach ($this->extractors as $extractor) {
             if ($extractor->supports($format)) {
-                return $this->run($extractor, $absolute, $format);
+                return $this->run($extractor, $absolute, $format, $deadline);
             }
         }
 
@@ -247,10 +271,16 @@ final class TextExtractor
         }
     }
 
-    private function run(Extractor $extractor, string $path, Format $format): Result
+    private function run(Extractor $extractor, string $path, Format $format, Deadline $deadline): Result
     {
         try {
-            $result = $extractor->extract($path, $format, $this->options);
+            $result = $extractor instanceof DeadlineAwareExtractor
+                ? $extractor->extractWithin($path, $format, $this->options, $deadline)
+                : $extractor->extract($path, $format, $this->options);
+        } catch (ParseTimedOut $exception) {
+            // Whatever text was gathered before the limit is incomplete in an unknown way, so it
+            // is dropped rather than returned as if the document ended there.
+            return Result::failed(Reason::ParseTimeout, $format, $exception->getMessage());
         } catch (ArchiveLimitExceeded $exception) {
             return Result::notExtractable(Reason::ArchiveLimitExceeded, $format, $exception->getMessage());
         } catch (CorruptInput $exception) {

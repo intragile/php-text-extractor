@@ -8,7 +8,6 @@ use DOMDocument;
 use DOMElement;
 use DOMNode;
 use DOMText;
-use IntrAgile\TextExtractor\Contracts\Extractor;
 use IntrAgile\TextExtractor\Format;
 use IntrAgile\TextExtractor\Options;
 use IntrAgile\TextExtractor\Output\Encoding;
@@ -17,6 +16,8 @@ use IntrAgile\TextExtractor\Output\TextBuffer;
 use IntrAgile\TextExtractor\Output\TextNormalizer;
 use IntrAgile\TextExtractor\Reason;
 use IntrAgile\TextExtractor\Result;
+use IntrAgile\TextExtractor\Support\Deadline;
+use IntrAgile\TextExtractor\Support\DeadlineAwareExtractor;
 
 /**
  * Renders an HTML document as plain text with paragraph and table structure preserved.
@@ -27,7 +28,7 @@ use IntrAgile\TextExtractor\Result;
  * The document is decoded to UTF-8 up front and libxml is told so through a leading XML
  * declaration; otherwise it would assume ISO-8859-1 and mangle every multibyte character.
  */
-final class HtmlExtractor implements Extractor
+final class HtmlExtractor implements DeadlineAwareExtractor
 {
     private const SNIFF_BYTES = 4096;
 
@@ -56,6 +57,11 @@ final class HtmlExtractor implements Extractor
     }
 
     public function extract(string $path, Format $format, Options $options): Result
+    {
+        return $this->extractWithin($path, $format, $options, Deadline::fromOptions($options));
+    }
+
+    public function extractWithin(string $path, Format $format, Options $options, Deadline $deadline): Result
     {
         if (! extension_loaded('dom')) {
             return Result::failed(Reason::MissingExtension, $format, 'ext-dom is required to extract text from HTML.');
@@ -107,7 +113,7 @@ final class HtmlExtractor implements Extractor
         }
 
         if ($document->documentElement !== null) {
-            $this->walk($document->documentElement, false, $writer);
+            $this->walk($document->documentElement, false, $writer, $deadline);
         }
 
         return Result::extracted($buffer->toString(), $format, $buffer->isTruncated());
@@ -220,9 +226,11 @@ final class HtmlExtractor implements Extractor
     /**
      * @return bool false once the output buffer is full
      */
-    private function walk(DOMNode $node, bool $preformatted, LayoutWriter $writer): bool
+    private function walk(DOMNode $node, bool $preformatted, LayoutWriter $writer, Deadline $deadline): bool
     {
         foreach ($node->childNodes as $child) {
+            $deadline->tick();
+
             if ($child instanceof DOMText) {
                 if (! $this->text($writer, $child->data, $preformatted)) {
                     return false;
@@ -250,7 +258,7 @@ final class HtmlExtractor implements Extractor
             }
 
             if (! $this->open($name, $writer)
-                || ! $this->walk($child, $preformatted || $name === 'pre', $writer)
+                || ! $this->walk($child, $preformatted || $name === 'pre', $writer, $deadline)
                 || ! $this->close($name, $writer)) {
                 return false;
             }

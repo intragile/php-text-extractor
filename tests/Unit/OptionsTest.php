@@ -28,6 +28,7 @@ final class OptionsTest extends TestCase
         $this->assertSame('eng', $options->ocrLanguages);
         $this->assertSame('Windows-1252', $options->fallbackEncoding);
         $this->assertSame(10485760, $options->maxHtmlBytes);
+        $this->assertSame(60, $options->maxParseSeconds);
     }
 
     /**
@@ -35,7 +36,7 @@ final class OptionsTest extends TestCase
      */
     public static function positiveLimits(): iterable
     {
-        foreach (['maxInputBytes', 'maxOutputBytes', 'maxArchiveEntryBytes', 'maxArchiveTotalBytes', 'maxArchiveEntries', 'maxImagePixels', 'processTimeout', 'maxHtmlBytes'] as $name) {
+        foreach (['maxInputBytes', 'maxOutputBytes', 'maxArchiveEntryBytes', 'maxArchiveTotalBytes', 'maxArchiveEntries', 'maxImagePixels', 'processTimeout', 'maxHtmlBytes', 'maxParseSeconds'] as $name) {
             yield $name => [$name];
         }
     }
@@ -81,6 +82,11 @@ final class OptionsTest extends TestCase
     public function test_with_overrides_the_html_size_limit(): void
     {
         $this->assertSame(1024, (new Options)->with(['maxHtmlBytes' => 1024])->maxHtmlBytes);
+    }
+
+    public function test_with_overrides_the_parse_time_limit(): void
+    {
+        $this->assertSame(5, (new Options)->with(['maxParseSeconds' => 5])->maxParseSeconds);
     }
 
     public function test_with_rejects_unknown_option_names(): void

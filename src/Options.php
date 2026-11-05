@@ -24,6 +24,7 @@ final class Options
         'maxImagePixels',
         'processTimeout',
         'maxHtmlBytes',
+        'maxParseSeconds',
     ];
 
     /**
@@ -31,6 +32,7 @@ final class Options
      * @param  string  $ocrLanguages  Tesseract language list, e.g. "hun+eng".
      * @param  string  $fallbackEncoding  Assumed encoding of text that is not valid UTF-8.
      * @param  int  $maxHtmlBytes  Largest HTML document parsed; a DOM costs many times the file size.
+     * @param  int  $maxParseSeconds  CPU-bound parsing done in PHP gives up after this many seconds.
      */
     public function __construct(
         public readonly int $maxInputBytes = 104857600,
@@ -46,6 +48,7 @@ final class Options
         public readonly string $ocrLanguages = 'eng',
         public readonly string $fallbackEncoding = 'Windows-1252',
         public readonly int $maxHtmlBytes = 10485760,
+        public readonly int $maxParseSeconds = 60,
     ) {
         foreach (self::POSITIVE as $name) {
             if ($this->{$name} < 1) {
@@ -81,7 +84,7 @@ final class Options
             }
         }
 
-        /** @var array{maxInputBytes: int, maxOutputBytes: int, maxArchiveEntryBytes: int, maxArchiveTotalBytes: int, maxArchiveEntries: int, maxImagePixels: int, processTimeout: int, processMemoryMb: int, pdftotextBinary: ?string, tesseractBinary: ?string, ocrLanguages: string, fallbackEncoding: string, maxHtmlBytes: int} $merged */
+        /** @var array{maxInputBytes: int, maxOutputBytes: int, maxArchiveEntryBytes: int, maxArchiveTotalBytes: int, maxArchiveEntries: int, maxImagePixels: int, processTimeout: int, processMemoryMb: int, pdftotextBinary: ?string, tesseractBinary: ?string, ocrLanguages: string, fallbackEncoding: string, maxHtmlBytes: int, maxParseSeconds: int} $merged */
         $merged = array_merge($current, $overrides);
 
         return new self(...$merged);

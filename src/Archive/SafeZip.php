@@ -6,6 +6,7 @@ namespace IntrAgile\TextExtractor\Archive;
 
 use IntrAgile\TextExtractor\Exception\CorruptInput;
 use IntrAgile\TextExtractor\Options;
+use IntrAgile\TextExtractor\Support\Deadline;
 use IntrAgile\TextExtractor\Xml\SafeXmlReader;
 use LogicException;
 use ZipArchive;
@@ -23,16 +24,21 @@ final class SafeZip
 
     private ByteBudget $total;
 
-    private function __construct(private readonly ZipArchive $zip, private readonly Options $options)
-    {
+    private function __construct(
+        private readonly ZipArchive $zip,
+        private readonly Options $options,
+        private readonly ?Deadline $deadline,
+    ) {
         $this->total = new ByteBudget($options->maxArchiveTotalBytes);
     }
 
     /**
+     * @param  Deadline|null  $deadline  Applied to every XML reader the archive hands out.
+     *
      * @throws CorruptInput when the file is not a readable zip archive
      * @throws ArchiveLimitExceeded when the archive holds more entries than allowed
      */
-    public static function open(string $path, Options $options): self
+    public static function open(string $path, Options $options, ?Deadline $deadline = null): self
     {
         if (! extension_loaded('zip')) {
             throw new LogicException('ext-zip is required to read zip containers.');
@@ -51,7 +57,7 @@ final class SafeZip
             throw new ArchiveLimitExceeded(sprintf('The archive holds %d entries; the limit is %d.', $count, $options->maxArchiveEntries));
         }
 
-        $archive = new self($zip, $options);
+        $archive = new self($zip, $options, $deadline);
 
         for ($index = 0; $index < $zip->numFiles; $index++) {
             $name = $zip->getNameIndex($index);
@@ -128,6 +134,7 @@ final class SafeZip
         return SafeXmlReader::fromUri(
             $uri,
             static fn (): bool => $entry->isExceeded() || $total->isExceeded(),
+            $this->deadline,
         );
     }
 

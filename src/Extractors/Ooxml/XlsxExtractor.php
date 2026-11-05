@@ -6,13 +6,14 @@ namespace IntrAgile\TextExtractor\Extractors\Ooxml;
 
 use IntrAgile\TextExtractor\Archive\ArchiveLimitExceeded;
 use IntrAgile\TextExtractor\Archive\SafeZip;
-use IntrAgile\TextExtractor\Contracts\Extractor;
 use IntrAgile\TextExtractor\Exception\CorruptInput;
 use IntrAgile\TextExtractor\Format;
 use IntrAgile\TextExtractor\Options;
 use IntrAgile\TextExtractor\Output\TextBuffer;
 use IntrAgile\TextExtractor\Reason;
 use IntrAgile\TextExtractor\Result;
+use IntrAgile\TextExtractor\Support\Deadline;
+use IntrAgile\TextExtractor\Support\DeadlineAwareExtractor;
 use IntrAgile\TextExtractor\Xml\MalformedXml;
 use IntrAgile\TextExtractor\Xml\SafeXmlReader;
 use XMLReader;
@@ -33,7 +34,7 @@ use XMLReader;
  * at most maxOutputBytes of text. The cell-format table costs four bytes per entry and is capped
  * like the shared-string table.
  */
-final class XlsxExtractor implements Extractor
+final class XlsxExtractor implements DeadlineAwareExtractor
 {
     private const RELATIONSHIP_NAMESPACES = [
         'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
@@ -75,13 +76,18 @@ final class XlsxExtractor implements Extractor
 
     public function extract(string $path, Format $format, Options $options): Result
     {
+        return $this->extractWithin($path, $format, $options, Deadline::fromOptions($options));
+    }
+
+    public function extractWithin(string $path, Format $format, Options $options, Deadline $deadline): Result
+    {
         foreach (['zip', 'xmlreader'] as $extension) {
             if (! extension_loaded($extension)) {
                 return Result::failed(Reason::MissingExtension, $format, sprintf('ext-%s is required to read XLSX files.', $extension));
             }
         }
 
-        $zip = SafeZip::open($path, $options);
+        $zip = SafeZip::open($path, $options, $deadline);
 
         try {
             $workbook = PartLocator::mainPart($zip, 'xl/workbook.xml') ?? throw new CorruptInput('The workbook part is missing.');

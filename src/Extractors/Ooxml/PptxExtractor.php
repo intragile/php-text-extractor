@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace IntrAgile\TextExtractor\Extractors\Ooxml;
 
 use IntrAgile\TextExtractor\Archive\SafeZip;
-use IntrAgile\TextExtractor\Contracts\Extractor;
 use IntrAgile\TextExtractor\Exception\CorruptInput;
 use IntrAgile\TextExtractor\Format;
 use IntrAgile\TextExtractor\Options;
@@ -13,6 +12,8 @@ use IntrAgile\TextExtractor\Output\LayoutWriter;
 use IntrAgile\TextExtractor\Output\TextBuffer;
 use IntrAgile\TextExtractor\Reason;
 use IntrAgile\TextExtractor\Result;
+use IntrAgile\TextExtractor\Support\Deadline;
+use IntrAgile\TextExtractor\Support\DeadlineAwareExtractor;
 use IntrAgile\TextExtractor\Xml\SafeXmlReader;
 use XMLReader;
 
@@ -23,7 +24,7 @@ use XMLReader;
  * the slideN.xml file names. Speaker notes are left out. Tables are written one line per row with
  * tab-separated cells.
  */
-final class PptxExtractor implements Extractor
+final class PptxExtractor implements DeadlineAwareExtractor
 {
     private const PRESENTATIONML = [
         'http://schemas.openxmlformats.org/presentationml/2006/main' => true,
@@ -49,11 +50,16 @@ final class PptxExtractor implements Extractor
 
     public function extract(string $path, Format $format, Options $options): Result
     {
+        return $this->extractWithin($path, $format, $options, Deadline::fromOptions($options));
+    }
+
+    public function extractWithin(string $path, Format $format, Options $options, Deadline $deadline): Result
+    {
         if (! extension_loaded('zip') || ! extension_loaded('xmlreader')) {
             return Result::failed(Reason::MissingExtension, $format, 'ext-zip and ext-xmlreader are required to read PPTX files.');
         }
 
-        $zip = SafeZip::open($path, $options);
+        $zip = SafeZip::open($path, $options, $deadline);
         $buffer = new TextBuffer($options->maxOutputBytes);
 
         try {

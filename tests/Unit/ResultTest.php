@@ -28,6 +28,23 @@ final class ResultTest extends TestCase
         Result::notExtractable(Reason::ToolTimeout);
     }
 
+    public function test_parse_timeout_is_a_retryable_failure(): void
+    {
+        $failed = Result::failed(Reason::ParseTimeout, Format::Docx, 'took too long');
+
+        $this->assertSame(Status::Failed, $failed->status);
+        $this->assertSame(Reason::ParseTimeout, $failed->reason);
+        $this->assertTrue($failed->isRetryable());
+        $this->assertFalse($failed->isSuccessful());
+    }
+
+    public function test_parse_timeout_cannot_be_reported_as_not_extractable(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        Result::notExtractable(Reason::ParseTimeout);
+    }
+
     public function test_empty_rejects_a_reason_belonging_to_another_status(): void
     {
         $this->expectException(InvalidArgumentException::class);
@@ -44,6 +61,7 @@ final class ResultTest extends TestCase
         yield 'missing_extension' => [Reason::MissingExtension, Status::Failed];
         yield 'missing_tool' => [Reason::MissingTool, Status::Failed];
         yield 'tool_timeout' => [Reason::ToolTimeout, Status::Failed];
+        yield 'parse_timeout' => [Reason::ParseTimeout, Status::Failed];
         yield 'tool_failed' => [Reason::ToolFailed, Status::Failed];
         yield 'internal_error' => [Reason::InternalError, Status::Failed];
         yield 'unsupported_format' => [Reason::UnsupportedFormat, Status::NotExtractable];
@@ -72,6 +90,7 @@ final class ResultTest extends TestCase
     {
         $this->assertSame('archive_limit_exceeded', Reason::ArchiveLimitExceeded->value);
         $this->assertSame('no_text_layer', Reason::NoTextLayer->value);
+        $this->assertSame('parse_timeout', Reason::ParseTimeout->value);
         $this->assertSame('not_extractable', Status::NotExtractable->value);
     }
 
