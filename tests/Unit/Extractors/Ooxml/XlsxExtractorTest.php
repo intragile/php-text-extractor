@@ -277,18 +277,6 @@ final class XlsxExtractorTest extends TestCase
         $this->assertSame(Reason::Corrupt, $result->reason);
     }
 
-    private static function peakGrowth(callable $work): int
-    {
-        if (function_exists('memory_reset_peak_usage')) {
-            memory_reset_peak_usage();
-        }
-
-        $before = memory_get_peak_usage();
-        $work();
-
-        return memory_get_peak_usage() - $before;
-    }
-
     private function extract(string $path, ?Options $options = null): Result
     {
         return (new TextExtractor($options, extractors: [new XlsxExtractor]))->extract($path);

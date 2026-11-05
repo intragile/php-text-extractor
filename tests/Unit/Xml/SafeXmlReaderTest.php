@@ -259,18 +259,6 @@ final class SafeXmlReaderTest extends TestCase
         self::drainText(SafeXmlReader::fromFile('data://text/plain,<r>injected</r>'));
     }
 
-    private static function peakGrowth(callable $work): int
-    {
-        if (function_exists('memory_reset_peak_usage')) {
-            memory_reset_peak_usage();
-        }
-
-        $before = memory_get_peak_usage();
-        $work();
-
-        return memory_get_peak_usage() - $before;
-    }
-
     public function test_internal_error_state_is_restored(): void
     {
         $before = libxml_use_internal_errors(false);

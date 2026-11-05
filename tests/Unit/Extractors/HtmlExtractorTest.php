@@ -169,23 +169,30 @@ final class HtmlExtractorTest extends TestCase
 
         // Every unterminated tag is a parse error; collecting them would cost about fifteen times
         // the size of this 2.8 MB input. The baseline for parsing a document of the same size
-        // differs between PHP versions, so the error-heavy run is compared with a clean one.
-        $clean = Fixtures::file(str_repeat('<div>ok</div>', 220_000), 'html');
+        // differs between PHP versions, so the error-heavy run is compared with a clean one whose
+        // empty elements yield almost no text, keeping the output buffer out of the comparison.
+        $warmUp = Fixtures::file('<p>warm up</p>', 'html');
+        $clean = Fixtures::file('<p>ok</p>'.str_repeat('<div></div>', 255_000), 'html');
         $path = Fixtures::file(str_repeat('<meta charset ', 200_000).'<p>text</p>', 'html');
+        $extractor = new HtmlExtractor;
         $previous = libxml_use_internal_errors(true);
 
         try {
-            memory_reset_peak_usage();
-            $before = memory_get_usage();
-            (new HtmlExtractor)->extract($clean, Format::Html, new Options);
-            $baseline = memory_get_peak_usage() - $before;
+            $this->assertSame(Status::Extracted, $extractor->extract($warmUp, Format::Html, new Options)->status);
 
-            memory_reset_peak_usage();
-            $before = memory_get_usage();
-            $result = (new HtmlExtractor)->extract($path, Format::Html, new Options);
+            $baseline = self::peakGrowth(static function () use ($extractor, $clean, &$cleanResult): void {
+                $cleanResult = $extractor->extract($clean, Format::Html, new Options);
+            });
+            $growth = self::peakGrowth(static function () use ($extractor, $path, &$result): void {
+                $result = $extractor->extract($path, Format::Html, new Options);
+            });
 
+            $this->assertInstanceOf(Result::class, $cleanResult);
+            $this->assertSame(Status::Extracted, $cleanResult->status);
+            $this->assertInstanceOf(Result::class, $result);
             $this->assertSame(Status::Extracted, $result->status);
-            $this->assertLessThan(2 * $baseline + 1048576, memory_get_peak_usage() - $before);
+            $this->assertLessThan(2 * $baseline + 1048576, $growth);
+            $this->assertLessThan(16 * 1024 * 1024, $growth);
             $this->assertSame([], libxml_get_errors());
             $this->assertTrue(libxml_use_internal_errors(true), 'The caller\'s libxml error mode is restored.');
         } finally {

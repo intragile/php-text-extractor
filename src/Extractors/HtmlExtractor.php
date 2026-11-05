@@ -69,8 +69,15 @@ final class HtmlExtractor implements Extractor
             return $this->tooLarge($size, $format, $options);
         }
 
-        // One byte over the limit is enough to notice a file that grew after the size check.
-        $bytes = @file_get_contents($path, false, null, 0, max(1, min($options->maxHtmlBytes, PHP_INT_MAX - 1) + 1));
+        // One byte over the limit is enough to notice a file that grew after the size check. The
+        // length is capped at the known size because PHP before 8.3 allocates the whole maximum
+        // length up front.
+        $limit = is_int($size) ? min($size, $options->maxHtmlBytes) : $options->maxHtmlBytes;
+        $bytes = $this->read($path, $limit);
+
+        if (is_string($bytes) && strlen($bytes) > $limit && $limit < $options->maxHtmlBytes) {
+            $bytes = $this->read($path, $options->maxHtmlBytes);
+        }
 
         if ($bytes === false) {
             return Result::failed(Reason::Unreadable, $format, 'The file cannot be read.');
@@ -104,6 +111,14 @@ final class HtmlExtractor implements Extractor
         }
 
         return Result::extracted($buffer->toString(), $format, $buffer->isTruncated());
+    }
+
+    /**
+     * Reads at most one byte more than $limit.
+     */
+    private function read(string $path, int $limit): string|false
+    {
+        return @file_get_contents($path, false, null, 0, max(1, min($limit, PHP_INT_MAX - 1) + 1));
     }
 
     private function tooLarge(int $size, Format $format, Options $options): Result
