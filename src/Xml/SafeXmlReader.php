@@ -30,15 +30,22 @@ final class SafeXmlReader
 {
     private const FLAGS = LIBXML_NONET | LIBXML_COMPACT;
 
+    private const PROLOG_BYTES = 65536;
+
     private bool $closed = false;
 
     private bool $sawNode = false;
 
+    /**
+     * @param  Closure(): bool|null  $limitExceeded
+     * @param  Closure(): string|null  $prolog
+     */
     private function __construct(
         private readonly XMLReader $reader,
         private readonly bool $previousErrorMode,
         private readonly ?Closure $limitExceeded,
         private readonly ?Deadline $deadline,
+        private readonly ?Closure $prolog,
     ) {
         $reader->setParserProperty(XMLReader::LOADDTD, false);
         $reader->setParserProperty(XMLReader::DEFAULTATTRS, false);
@@ -48,8 +55,11 @@ final class SafeXmlReader
 
     /**
      * @param  Closure(): bool|null  $limitExceeded  Reports whether an underlying byte budget ran out.
+     * @param  Closure(): string|null  $prolog  Returns the first raw bytes of the document, used to
+     *                                          inspect a DOCTYPE the parser does not expose; without
+     *                                          it every DOCTYPE the parser cannot show is refused.
      */
-    public static function fromUri(string $uri, ?Closure $limitExceeded = null, ?Deadline $deadline = null): self
+    public static function fromUri(string $uri, ?Closure $limitExceeded = null, ?Deadline $deadline = null, ?Closure $prolog = null): self
     {
         self::requireExtension();
         $previous = libxml_use_internal_errors(true);
@@ -62,7 +72,7 @@ final class SafeXmlReader
             throw new MalformedXml('The XML document cannot be opened.');
         }
 
-        return new self($reader, $previous, $limitExceeded, $deadline);
+        return new self($reader, $previous, $limitExceeded, $deadline, $prolog);
     }
 
     /**
@@ -71,7 +81,12 @@ final class SafeXmlReader
      */
     public static function fromFile(string $path, ?Deadline $deadline = null): self
     {
-        return self::fromUri(self::fileUri($path), null, $deadline);
+        return self::fromUri(
+            self::fileUri($path),
+            null,
+            $deadline,
+            static fn (): string => (string) @file_get_contents($path, false, null, 0, self::PROLOG_BYTES),
+        );
     }
 
     public static function fromString(string $xml, ?Deadline $deadline = null): self
@@ -92,7 +107,7 @@ final class SafeXmlReader
             throw new MalformedXml('The XML document cannot be parsed.');
         }
 
-        return new self($reader, $previous, null, $deadline);
+        return new self($reader, $previous, null, $deadline, static fn (): string => substr($xml, 0, self::PROLOG_BYTES));
     }
 
     /**
@@ -262,14 +277,19 @@ final class SafeXmlReader
     }
 
     /**
-     * libxml serialises a DOCTYPE with its internal subset, so the subset shows up either as
-     * declarations ("[ ... ]>") or, for comments and processing instructions, as inner markup.
+     * libxml before 2.14 serialises a DOCTYPE with its internal subset, so the subset shows up
+     * either as declarations ("[ ... ]>") or, for comments and processing instructions, as inner
+     * markup. Later versions serialise nothing, and the raw prolog is inspected instead.
      */
     private function hasInternalSubset(): bool
     {
         $outer = rtrim(@$this->reader->readOuterXml());
         $inner = @$this->reader->readInnerXml();
         libxml_clear_errors();
+
+        if ($outer === '' && $inner === '') {
+            return $this->prolog === null || DoctypeScanner::mayHaveInternalSubset(($this->prolog)());
+        }
 
         return str_ends_with($outer, ']>') || $inner !== '';
     }

@@ -27,6 +27,12 @@ final class ZipEntryStream
 
     private static int $sequence = 0;
 
+    /** Bytes kept from the start of each entry, enough for any realistic XML prolog. */
+    public const HEAD_BYTES = 65536;
+
+    /** @var array<int, string> token => first bytes served */
+    private static array $heads = [];
+
     /** @var resource|null */
     private $inner;
 
@@ -54,7 +60,16 @@ final class ZipEntryStream
 
     public static function release(string $uri): void
     {
-        unset(self::$entries[(int) substr($uri, strlen(self::SCHEME) + 3)]);
+        $token = (int) substr($uri, strlen(self::SCHEME) + 3);
+        unset(self::$entries[$token], self::$heads[$token]);
+    }
+
+    /**
+     * The first bytes the entry has served so far, up to HEAD_BYTES.
+     */
+    public static function head(string $uri): string
+    {
+        return self::$heads[(int) substr($uri, strlen(self::SCHEME) + 3)] ?? '';
     }
 
     public function stream_open(string $path, string $mode, int $options, ?string &$openedPath): bool
@@ -98,6 +113,12 @@ final class ZipEntryStream
 
                 return '';
             }
+        }
+
+        $head = self::$heads[$this->token] ?? '';
+
+        if (strlen($head) < self::HEAD_BYTES) {
+            self::$heads[$this->token] = $head.substr($data, 0, self::HEAD_BYTES - strlen($head));
         }
 
         return $data;

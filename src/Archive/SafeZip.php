@@ -135,6 +135,7 @@ final class SafeZip
             $uri,
             static fn (): bool => $entry->isExceeded() || $total->isExceeded(),
             $this->deadline,
+            static fn (): string => ZipEntryStream::head($uri),
         );
     }
 
